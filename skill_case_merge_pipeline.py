@@ -42,6 +42,9 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 抓包分析（wireshark等）、仿真验证、重启协议进程这类agent执行不了或有风险的动作，不要写成步骤。
 - 管控接口只写案例里给出的信息（路径、案例中提到的入参）。案例没给HTTP方法就不要猜，更不要写"根据具体网管API定义"这类模糊说法；入参字段名案例只给了中文描述时，就用中文描述，不要自己编英文字段名。
 - 案例中形如"—— 待确认xxx"、"请刘瑞xxx"、"求助设备专家"、人名工号等内部讨论备注，一律不要写进skill。
+- skill的读者是执行排障的agent，它看不到本次的输入案例，也不知道什么是"目标skill"。正文里禁止出现"按案例描述"、"根据案例描述"、"案例中未给出"、"新案例"、"原skill"、"本skill主要针对xxx"这类交代来源或自我说明的话；拿不准某个动作能不能做时，直接写你确定的部分，不要把犹豫写进正文。
+- 案例给出了某个分支的检查步骤时（如"若不是切片接口则检查xxx"），该分支要照写，不要用"参考常规xxx排障"一句话带过。
+- 追加或新建的内容属于目标skill自身，引用同一篇skill里的其它小节时直接写"参考本文场景X"，不要用[路径.md]形式引用目标skill自己。
 - 引用其它分类的skill时，用方括号包裹skill目录清单中的相对路径，如：参考[故障处理：IP路由/BGP故障案例.md]继续排查；清单中没有的文档只保留纯文字说明，不要输出链接。
 - 命令回显不要大段照搬，讲清要关注回显里的哪些字段即可；设备配置样例保留必要的几行即可。
 - 案例中的管控接口（如 POST /rest/xxx）属于修复手段，可以保留，写清接口用途和关键入参。"""
@@ -156,7 +159,8 @@ def section_headings(markdown: str) -> list:
     return [h.strip() for h in re.findall(r"^## +(.+)$", markdown or "", re.MULTILINE)]
 
 
-def prepare_merge_content(reply: str, existing_headings: list = None) -> tuple:
+def prepare_merge_content(reply: str, existing_headings: list = None,
+                          target_path: str = "") -> tuple:
     """从合并阶段的回复里取出 (判定, 规整后的内容, 错误说明)。
 
     existing_headings 为目标skill已有的二级小节标题，用于挡住"续写既有小节"。
@@ -168,16 +172,33 @@ def prepare_merge_content(reply: str, existing_headings: list = None) -> tuple:
     content = extract_markdown_content(reply)
     if action == "append":
         content = normalize_append_content(content)
-    return decision, content, check_generated_content(action, content, existing_headings)
+    return decision, content, check_generated_content(action, content, existing_headings,
+                                                     target_path)
 
 
-def check_generated_content(action: str, content: str, existing_headings: list = None) -> str:
+# 只有本次流水线才知道"案例""目标skill"是什么，排障时的agent看不到，
+# 正文里出现这些词说明模型在向流水线交代而不是在写排障步骤。
+META_NARRATION_PATTERNS = [
+    r"按案例描述", r"根据案例描述", r"案例(中|里)(未|没有)", r"新案例", r"原skill", r"目标skill",
+    r"本\s*[Ss]kill(主要|仅|只)",
+]
+
+
+def check_generated_content(action: str, content: str, existing_headings: list = None,
+                            target_path: str = "") -> str:
     """检查生成内容是否可直接落盘，返回错误说明（空串表示通过）。"""
     content = (content or "").strip()
     if action == "covered":
         return ""
     if not content:
         return f"action={action} 但没有生成内容"
+    for pattern in META_NARRATION_PATTERNS:
+        hit = re.search(pattern, content)
+        if hit:
+            return (f"正文出现了面向本流水线的自述'{hit.group(0)}'，"
+                    f"skill的读者是排障agent，看不到案例，需改写为直接的排障说明")
+    if target_path and re.search(r"\[[^\[\]\n]*" + re.escape(target_path.split("/")[-1]) + r"\]", content):
+        return f"引用了目标skill自身[{target_path}]，同一篇内应写成'参考本文场景X'"
     if action == "append":
         if content.startswith("---"):
             return "追加内容里带了frontmatter，应只输出小节"
@@ -201,10 +222,10 @@ def check_generated_content(action: str, content: str, existing_headings: list =
     return f"未知的action: {action!r}"
 
 
-def make_merge_extractor(existing_headings: list):
+def make_merge_extractor(existing_headings: list, target_path: str = ""):
     """内容不合规时抛异常，让call_model_with_retry重试，并把原因带进最终报错。"""
     def _extractor(text: str) -> str:
-        _, content, error = prepare_merge_content(text, existing_headings)
+        _, content, error = prepare_merge_content(text, existing_headings, target_path)
         if error:
             raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
         return text
@@ -467,13 +488,13 @@ def merge_bucket(args: tuple) -> dict:
     print(f"[PID {os.getpid()}] 合并到: {target}（案例组: {'、'.join(fault_types)}）")
     existing_headings = section_headings(target_content)
     reply = call_model_with_retry(api_url, model_name, prompt,
-                                  extractor=make_merge_extractor(existing_headings))
+                                  extractor=make_merge_extractor(existing_headings, target))
     result = {"target": target, "fault_types": fault_types, "is_new": not target_content}
     if reply.startswith("错误："):
         result["error"] = reply
         return result
     try:
-        decision, content, _ = prepare_merge_content(reply, existing_headings)
+        decision, content, _ = prepare_merge_content(reply, existing_headings, target)
     except (ValueError, json.JSONDecodeError) as e:
         result["error"] = f"错误：合并结果解析失败: {e}"
         return result
