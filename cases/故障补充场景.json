@@ -217,7 +217,7 @@
       "故障类型": "SR-TE隧道故障",
       "根因类型": "人工关闭SR-TE隧道",
       "触发告警": "sr-te policy status has been changed",
-      "故障诊断": "1、确定故障对象：根据告警确定故障的网元和隧道对象、隧道接口；2、查询隧道接口配置：使用命令display current-configuration interface <tunnel接口名>查询隧道配置；3、根因识别：根据命令回显，分析是否存在\"shutdown\"，若存在则根因为人工关闭RSVP-TE隧道；",
+      "故障诊断": "1、确定故障对象：根据告警确定故障的网元和隧道对象、隧道接口；2、查询隧道接口配置：使用命令display current-configuration interface <tunnel接口名>查询隧道配置；3、根因识别：根据命令回显，分析是否存在\"shutdown\"，若存在则根因为人工关闭SR-TE隧道；",
       "方案生成": "提供api开启隧道，给设备tunnel配置undo shutdownPATCH /rest/iptunnelservice/v1/te-tunnel/action/modify-tunnel入参：{\r  \"id\": \"3534fd3f-0ae3-404d-8c58-7f38232172bf\",\r  \"tunnels\": [\r    {\r      \"id\": \"df4ec195-6a44-4488-a04d-3581ffb9c0a1\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功",
       "对管控依赖": "1、隧道管理态配置下发接口：enableSRTETunnel(tunnel标识)",
       "备注": ""
