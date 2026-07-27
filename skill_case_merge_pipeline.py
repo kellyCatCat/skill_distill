@@ -685,11 +685,13 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
 if __name__ == "__main__":
     main(
         CASES_PATH="cases/故障补充场景.json",
-        SKILL_DIR=f"skills_distilled/{datetime.now().strftime('%m-%d')}",
+        SKILL_DIR="skills_distilled/07-16",
         API_URL="http://76.64.185.52:2207/v1/chat/completions",
         MODEL_NAME="qwen3.6-27b",
         WORKERS=3,
         # 变更说明写在skill目录外，避免被validate_skills.py当成skill校验
         REPORT_PATH=f"reports/skill_change_report_{datetime.now().strftime('%m-%d')}.md",
-        DRY_RUN=False,
+        # 追加不是幂等操作，重跑会重复追加。确认报告无误后再改False落盘，
+        # 落盘前先备份或提交skill目录。
+        DRY_RUN=True,
     )
