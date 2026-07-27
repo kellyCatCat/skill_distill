@@ -180,9 +180,11 @@ def prepare_merge_content(reply: str, existing_headings: list = None,
 # 正文里出现这些词说明模型在向流水线交代而不是在写排障步骤。
 META_NARRATION_PATTERNS = [
     r"按案例描述", r"根据案例描述", r"案例(中|里)(未|没有)", r"新案例", r"原skill", r"目标skill",
-    r"本\s*[Ss]kill(主要|仅|只)",
+    r"本?\s*[Ss]kill(主要|仅|只)(针对|支持|负责|写到)", r"此处假设", r"Agent(主要|仅|只)",
     # 把追加内容写成"改哪几步"的编辑说明，而不是可直接拼接的小节
     r"保留原有", r"更新步骤", r"新增步骤\s*\d", r"（原步骤", r"保持不变）",
+    # agent执行不了的动作，写成步骤等于把流程堵死在这里
+    r"[Ww]ireshark", r"抓包",
 ]
 
 
