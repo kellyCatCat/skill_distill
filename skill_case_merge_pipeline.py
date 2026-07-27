@@ -182,6 +182,75 @@ def match_overview_rows(fault_type: str, overview_table: list) -> list:
     return rows
 
 
+def _normalize_root_cause(text: str) -> str:
+    """比对根因用的归一化：去掉空格/连字符并转小写，让"人工关闭SR Policy"与
+    "人工关闭SR-Policy"、"BGP Router ID冲突"与"router-id冲突"能对上。"""
+    return re.sub(r"[\s\-_]", "", text).lower()
+
+
+def _root_cause_matches(row_cause: str, case_cause: str) -> bool:
+    """概览行的根因与详情页的根因是否指同一件事。
+
+    两边措辞常有出入（概览写"BGP Router ID冲突"、详情页写"...router-id冲突，
+    三个根因中的一种"；概览写"ISIS路由环路"、详情页只写"路由环路"），所以在
+    归一化之后用最长公共子串占较短串的比例来判定，而不是要求严格包含。
+    """
+    a, b = _normalize_root_cause(row_cause), _normalize_root_cause(case_cause)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    return _longest_common_substring_len(a, b) / min(len(a), len(b)) >= 0.6
+
+
+def _longest_common_substring_len(a: str, b: str) -> int:
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for ch_a in a:
+        cur = [0] * (len(b) + 1)
+        for j, ch_b in enumerate(b, 1):
+            if ch_a == ch_b:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+def audit_overview_coverage(cases: list, skipped: list, overview_table: list) -> tuple:
+    """概览表与详情页理论上一一对应，这里核对实际是否对得上。
+
+    返回 (只有概览行没有可用详情页的行, 有详情页但概览表没列的案例)。
+    仅有标题的补充页不算"有可用详情页"，因为蒸馏不出步骤；已下线的详情页
+    本就不该出现在概览表里，不参与反向核对。
+    """
+    skipped_titles = {s["slide"]: s["title"] for s in skipped}
+    orphan_rows = []
+    for row in overview_table:
+        definition = row.get("故障定义", "").strip()
+        root_cause = row.get("故障根因", "")
+        hit = any(
+            (definition in case["fault_type"] or case["fault_type"] in definition)
+            and _root_cause_matches(root_cause, case["root_cause"])
+            for case in cases
+        )
+        if not hit:
+            note = next((t for _, t in sorted(skipped_titles.items())
+                         if _root_cause_matches(root_cause, t)), "")
+            orphan_rows.append((definition, root_cause, note))
+
+    orphan_cases = []
+    for case in cases:
+        hit = any(
+            (row.get("故障定义", "").strip() in case["fault_type"]
+             or case["fault_type"] in row.get("故障定义", "").strip())
+            and _root_cause_matches(row.get("故障根因", ""), case["root_cause"])
+            for row in overview_table
+        )
+        if not hit:
+            orphan_cases.append(case)
+    return orphan_rows, orphan_cases
+
+
 def group_cases_by_fault_type(cases: list) -> dict:
     groups = {}
     for case in cases:
@@ -198,7 +267,12 @@ def format_case_brief(fault_type: str, cases: list) -> str:
 
 def format_case_detail(fault_type: str, cases: list, overview_table: list) -> str:
     blocks = []
-    for row in match_overview_rows(fault_type, overview_table):
+    overview_rows = match_overview_rows(fault_type, overview_table)
+    if overview_rows:
+        blocks.append(
+            "> 下面的“概览”块来自案例来源的总表，只说明该故障类型要达成的诊断/修复目标，"
+            "是纲要而非步骤；总表个别行的措辞与详情页不一致，两者冲突时一律以“案例”块为准。")
+    for row in overview_rows:
         blocks.append(
             f"## 概览：{row.get('故障定义', '')} / {row.get('故障根因', '')}\n"
             f"- 故障子类：{row.get('故障子类', '')}\n"
@@ -418,6 +492,17 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     print(f"\n有效案例 {len(cases)} 条，归为 {len(groups)} 个案例组；跳过 {len(skipped)} 条")
     for item in skipped:
         print(f"  - 跳过 第{item['slide']}页 {item['title']}：{item['reason']}")
+
+    orphan_rows, orphan_cases = audit_overview_coverage(cases, skipped, overview_table)
+    if orphan_rows:
+        print(f"\n[WARN] 概览表有 {len(orphan_rows)} 行找不到可用的详情页（该根因蒸馏不出步骤）:")
+        for definition, root_cause, note in orphan_rows:
+            tail = f"，疑似对应被跳过的“{note}”" if note else ""
+            print(f"  - {definition} / {root_cause}{tail}")
+    if orphan_cases:
+        print(f"\n[WARN] 有 {len(orphan_cases)} 条详情页未列入概览表（概览表可能漏行）:")
+        for case in orphan_cases:
+            print(f"  - 第{case['slide']}页 {case['fault_type']} / {case['root_cause']}")
 
     skill_index = build_skill_index(SKILL_DIR)
     print(f"\n既有skill {len(skill_index)} 个")
