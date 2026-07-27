@@ -163,9 +163,9 @@
       "根因类型": "BGP Peer IP不匹配、as-number不匹配、router-id冲突，三个根因中的一种",
       "触发告警": "BGP连接中断(Bgp Peer Backward Transition)，BGP状态改变告警（BGP Status Changed），BGP邻居不可用（Bgp Peer Unavailable）",
       "故障诊断": "确定故障对象：根据告警确定本端网元、bgp peer对端ip；根据对端ip查找接口存量资源找到对端网元和接口，若找不到对端网元和接口（在公网平面内查找），则判断根因为peer ip不匹配；找到对端，则获取本/对端bgp相关配置：通过命令行display current-configuration configuration bgp获取对端bgp配置，检查对端设备所有bgp peer的ip地址，是否存在本端网元的接口有配置相同的IP地址，若无则根因为peer ip不匹配（对端网元不存在到本端的bgp peer配置），否则继续下一步；通过命令行display current-configuration configuration bgp获取本端bgp配置，检查故障peer对应的as-number配置是否相互匹配；检查router-id是否冲突；场景约束：只支持公网面的BGP peer故障诊断，对端也在管理范围内（当对端不在管理范围内时，不支持诊断和修复），本对端之间v4、v6分别最多只有一个bgp peer（符合解决方案配置基线）；DeviceC的配置文件#interface GigabitEthernet0/3/0 undo shutdown ip address 10.1.3.2 255.255.255.0#interface LoopBack0 ip address 3.3.3.3 255.255.255.255#bgp 65009 router-id 4.4.4.4 peer 2.2.2.2 as-number 65008 peer 2.2.2.2 connect-interface LoopBack0 peer 4.4.4.5 as-number 65009 peer 4.4.4.4 connect-interface LoopBack0 # ipv4-family unicast  undo synchronization   peer 2.2.2.2 enable  peer 4.4.4.4 enable#DeviceD的配置文件#interface LoopBack0 ip address 4.4.4.4 255.255.255.255#bgp 65009 router-id 4.4.4.4 peer 2.2.2.2 as-number 65009 peer 2.2.2.2 connect-interface LoopBack0 peer 3.3.3.3 as-number 65009 peer 3.3.3.3 connect-interface LoopBack0 # ipv4-family unicast  undo synchronization   peer 2.2.2.2 enable  peer 3.3.3.3 enable#API：1、确定本端、对端网元/peer ip：      -输入：incident，或 告警；      -输出：本端网元、bgp peer IP，对端网元、bgp peer ipCLI：1、display current-configuration configuration bgpBGP Peer Down E2E流程：收到peer down告警  生成incident  确定本端、对端网元/peer ip(API)  硬件故障排查 (cot） 获取本端、对端bgp peer配置（Skill-by NL2CLI）  配置裁剪（找出故障peer相关的）（免） 配置问题分析（Skill）  修复配置生成",
-      "方案生成": "Peer IP不匹配（NA，人工远程修复）、as-number不匹配（自动修复）、router-id冲突（自动修复） ；1、router-id冲突：本端及对端二选一重新配置router-id（默认选择本端），调用NCE-IP接口分配router-id；NCE-IP基于router-id资源池自动分配（需要提前配置好资源池范围），确保全局唯一；2、as-number不匹配：peer的as-number配置修改为对端设备的as-number值；生成配置样例：system-viewbgp 65009  —— 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3 —— 修改router-id peer 2.2.2.2 as-number 65009 —— 修改as-numbercommit对管控的依赖：bgp router-id分配接口（按资源池分配）---当前无router-id资源池；（思路1：取lsr-id，求助设备专家对一下）",
+      "方案生成": "Peer IP不匹配（NA，人工远程修复）、as-number不匹配（自动修复）、router-id冲突（自动修复） ；1、router-id冲突：本端及对端二选一重新配置router-id（默认选择本端），调用NCE-IP接口分配router-id；NCE-IP基于router-id资源池自动分配（需要提前配置好资源池范围），确保全局唯一；2、as-number不匹配：peer的as-number配置修改为对端设备的as-number值；生成配置样例：system-viewbgp 65009  —— 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3 —— 修改router-id peer 2.2.2.2 as-number 65009 —— 修改as-numbercommit对管控的依赖：bgp router-id分配接口——取本设备的lsr-id作为新的router-id（lsr-id按loopback规划，全网唯一）；生成前需确认冲突两端的lsr-id本身不冲突。",
       "对管控依赖": "",
-      "备注": "约束: 只支持公网面的BGP peer故障诊断，对端也在管理范围内（当对端不在管理范围内时，不支持诊断和修复），本对端之间v4、v6分别最多只有一个bgp peer（符合解决方案配置基线）；; 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3; 修改router-id peer 2.2.2.2 as-number 65009; 修改as-numbercommit对管控的依赖：bgp router-id分配接口（按资源池分配）---当前无router-id资源池；（思路1：取lsr-id，求助设备专家对一下）"
+      "备注": "约束: 只支持公网面的BGP peer故障诊断，对端也在管理范围内（当对端不在管理范围内时，不支持诊断和修复），本对端之间v4、v6分别最多只有一个bgp peer（符合解决方案配置基线）；; 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3; 修改router-id peer 2.2.2.2 as-number 65009; 修改as-numbercommit对管控的依赖：bgp router-id分配接口——取本设备的lsr-id作为新的router-id（lsr-id按loopback规划，全网唯一）；生成前需确认冲突两端的lsr-id本身不冲突。"
     },
     {
       "slide": 10,
@@ -228,7 +228,7 @@
       "根因类型": "人工关闭SR-Policy",
       "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
       "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy管理状态信息：获取policy源宿两端网元的policy管理状态（调用管控接口）；故障判断：若policy管理状态为down，则根因为人工管理SR-Policy。--拿不到正确的管理状态？ 怎么不和rsvp一样走命令行查看回显？",
-      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功baocang继续梳理下完整流程",
+      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功",
       "对管控依赖": "1、接口1：SRPolicy对象信息查询接口，根据告警中的目的地址和color查找policy名称，以及源宿两端网元的sid2、SR-Policy管理状态修复接口CLI查询接口配置示例：设备上隧道被人工关闭：",
       "备注": ""
     },
@@ -243,7 +243,7 @@
       "根因类型": "人工关闭SRv6-Policy",
       "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
       "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy管理状态信息：获取policy源宿两端网元的policy管理状态（调用管控接口）；故障判断：若policy管理状态为down，则根因为人工管理SR-Policy。--拿不到正确的管理状态",
-      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功bao cang梳理下完整流程",
+      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功",
       "对管控依赖": "1、接口1：srv6policy配置信息查询接口，包括源宿两端网元的sid、两端网元的Policy管理状态；2、管理态修复接口",
       "备注": ""
     },
@@ -253,9 +253,9 @@
       "根因类型": "PW远端IP地址不匹配",
       "触发告警": "PW VC状态Down告警(PW VC Down) （封装类型，mtu，接口down，隧道down）",
       "故障诊断": "确定故障对象：根据告警确定PWE3业务故障的设备；查业务信息：调用NCE-IP接口，查询PWE3业务的配置信息，包括源宿两端网元，以及两端网元各自的l2vc配置；—— 返回无法找到对端，根据返回结果判断根因为远端IP地址不匹配检查本端配置问题：检查l2vc远端ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的l2vc远端ip地址正确，则检查对端l2vc远端ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；",
-      "方案生成": "1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口—— 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
+      "方案生成": "1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
       "对管控依赖": "",
-      "备注": "返回无法找到对端，根据返回结果判断根因为远端IP地址不匹配检查本端配置问题：检查l2vc远端ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的l2vc远端ip地址正确，则检查对端l2vc远端ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；方案生成：1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口; 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页"
+      "备注": "返回无法找到对端，根据返回结果判断根因为远端IP地址不匹配检查本端配置问题：检查l2vc远端ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的l2vc远端ip地址正确，则检查对端l2vc远端ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；方案生成：1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口"
     },
     {
       "slide": 21,
@@ -263,9 +263,9 @@
       "根因类型": "MTU不一致",
       "触发告警": "PW VC状态Down告警(PW VC Down) （封装类型，mtu，接口down，隧道down）",
       "故障诊断": "已支持",
-      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的接口，然后去接口下修改MTU的值。接口：fixPwe3Mtu(pwe3业务标识, 要修改的网元，mtu值）对管控的依赖：1、PWE3业务信息查询接口（已有，通过存量查询）2、PW mtu参数修复接口：fixPwMtu(xx)—— 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
+      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的接口，然后去接口下修改MTU的值。接口：fixPwe3Mtu(pwe3业务标识, 要修改的网元，mtu值）对管控的依赖：1、PWE3业务信息查询接口（已有，通过存量查询）2、PW mtu参数修复接口：fixPwMtu(xx)配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
       "对管控依赖": "",
-      "备注": "可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页"
+      "备注": ""
     },
     {
       "slide": 22,
@@ -273,9 +273,9 @@
       "根因类型": "PW远端IP地址不匹配",
       "触发告警": "VPLS VC状态Down（VPLS VC Down）（vsi的封装类型，mtu，接口down，隧道down）",
       "故障诊断": "确定故障对象：根据告警确定VPLS业务故障的设备和业务对象；查业务信息：调用NCE-IP接口，查询VPLS业务的配置信息，包括源宿两端网元，以及两端网元各自的vsi下的peer的配置；检查本端配置问题：检查vsi的peer的ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的vsi的peer的ip地址正确，则检查对端vsi的peer的ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；",
-      "方案生成": "1、生成vsi的peer的配置，ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备上某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供VPLS业务配置生成接口，故障agent调用该接口生成配置。接口：fixVplsIpAddress(VPLS业务标识, errNe, peerNe）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口—— 可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页",
+      "方案生成": "1、生成vsi的peer的配置，ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备上某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供VPLS业务配置生成接口，故障agent调用该接口生成配置。接口：fixVplsIpAddress(VPLS业务标识, errNe, peerNe）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口",
       "对管控依赖": "",
-      "备注": "可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页"
+      "备注": ""
     },
     {
       "slide": 23,
@@ -283,9 +283,9 @@
       "根因类型": "MTU不一致",
       "触发告警": "VPLS VC状态Down（VPLS VC Down）（vsi的封装类型，mtu，接口down，隧道down）",
       "故障诊断": "已支持",
-      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的Vsi，然后去vsi下修改MTU的值。接口：fixVplsMtu(VPLS业务标识, 网元, mtu）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口—— 可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页问题：是否存在1对多mtu不一致的情况？",
+      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的Vsi，然后去vsi下修改MTU的值。接口：fixVplsMtu(VPLS业务标识, 网元, mtu）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口问题：是否存在1对多mtu不一致的情况？",
       "对管控依赖": "",
-      "备注": "可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页问题：是否存在1对多mtu不一致的情况？"
+      "备注": "问题：是否存在1对多mtu不一致的情况？"
     },
     {
       "slide": 24,
@@ -309,7 +309,7 @@
       "触发告警": "PE模式不匹配/domain不匹配告警（PTP_ATTR_MISMATCH）",
       "故障诊断": "确定故障对象：根据告警确定时钟失锁的设备及端口（PE模式不匹配告警中包含端口）；确定对端：通过存量链路获取对端网元；获取时钟配置：查询故障设备及其上游设备的时钟配置，包括P/E模式配置；检查配置问题：检查故障设备与其上游设备之间的P/E模式是否一致，若不一致则根因为时钟P/E模式不匹配；",
       "方案生成": "1、通过",
-      "对管控依赖": "1、1588v2时钟配置查询：指定网元查询时钟配置，包括P/E模式、domain、跟踪口等；      查询接口：POST /rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/query-clock-info2、1588时钟配置下发：配置接口上的P/E模式     配置接口：POST /rest/rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/set-clock-info配置参考：相关专家：IP：张旭z00642474, lixiaotengPE1的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable ptp delay-mechanism delay（默认值）\r ptp enable#returnPE2的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable\r clock priority 10 ptp delay-mechanism pdelay ptp enable#returnPE模式配置在端口上： ptp delay-mechanism delay——E2E模式 ptp delay-mechanism pdelay——P2P模式",
+      "对管控依赖": "1、1588v2时钟配置查询：指定网元查询时钟配置，包括P/E模式、domain、跟踪口等；      查询接口：POST /rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/query-clock-info2、1588时钟配置下发：配置接口上的P/E模式     配置接口：POST /rest/rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/set-clock-infoPE1的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable ptp delay-mechanism delay（默认值）\r ptp enable#returnPE2的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable\r clock priority 10 ptp delay-mechanism pdelay ptp enable#returnPE模式配置在端口上： ptp delay-mechanism delay——E2E模式 ptp delay-mechanism pdelay——P2P模式",
       "备注": "找上游的方法：查询管控接口获取当前设备跟踪口，再根据存量链路获取对端网元，重复此步骤2、往上找2~3跳（查时钟协议决策选择的上游跟踪端口），P/E模式值跟上面几跳保持一致；若上面几跳也不统一，或已经是第一跳，则优先推荐E2E模式（两端都是E2E就没问题）。3、排除对接三方设备场景，如果查询设备配置是空的，那么是不支持的设备对管控依赖：1、1588v2时钟配置查询：指定网元查询时钟配置，包括P/E模式、domain、跟踪口等；      查询接口：POST /rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/query-clock-info2、1588时钟配置下发：配置接口上的P/E模式     配置接口：POST /rest/rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/set-clock-info; ptp delay-mechanism delay为E2E模式，ptp delay-mechanism pdelay为P2P模式"
     },
     {
