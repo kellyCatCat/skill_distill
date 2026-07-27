@@ -181,6 +181,8 @@ def prepare_merge_content(reply: str, existing_headings: list = None,
 META_NARRATION_PATTERNS = [
     r"按案例描述", r"根据案例描述", r"案例(中|里)(未|没有)", r"新案例", r"原skill", r"目标skill",
     r"本\s*[Ss]kill(主要|仅|只)",
+    # 把追加内容写成"改哪几步"的编辑说明，而不是可直接拼接的小节
+    r"保留原有", r"更新步骤", r"新增步骤\s*\d", r"（原步骤", r"保持不变）",
 ]
 
 
@@ -205,12 +207,18 @@ def check_generated_content(action: str, content: str, existing_headings: list =
         new_headings = section_headings(content)
         if not new_headings:
             return "追加内容里没有以'## '开头的小节"
-        # 追加内容是拼到文件末尾的，与既有小节同名会让文件里出现两个同名小节；
-        # 首个步骤编号不是1，说明模型在续写既有小节而不是新起一节。
+        # 追加内容整段拼到文件末尾，因此必须从第一个"## "小节开始：出现在它之前的
+        # 任何文字都会变成挂在上一小节下的游离内容（模型常在这里写"（保留原有
+        # 步骤1-3，更新步骤7）"这类改哪几步的编辑说明）。
+        if not content.startswith("## "):
+            stray = content.split("\n## ")[0].strip().replace("\n", " ")
+            return f"第一个'## '小节之前还有内容，追加内容必须从小节标题开始；多出的部分: {stray[:100]!r}"
+        # 与既有小节同名会让文件里出现两个同名小节；首个步骤编号不是1，
+        # 说明模型在续写既有小节而不是新起一节。
         dup = [h for h in new_headings if h in set(existing_headings or ())]
         if dup:
             return f"追加的小节与目标skill已有小节同名: {'、'.join(dup)}"
-        for block in re.split(r"^## +.+$", content, flags=re.MULTILINE)[1:]:
+        for block in re.split(r"^#{2,} +.+$", content, flags=re.MULTILINE)[1:]:
             first = re.search(r"^\s*(\d+)[.、)]", block, re.MULTILINE)
             if first and first.group(1) != "1":
                 return f"追加小节的步骤编号从{first.group(1)}开始，应为续写既有小节，须改为独立小节且从1开始"
