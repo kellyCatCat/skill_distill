@@ -4,6 +4,7 @@
 
 - `skill_self_distill_pipeline.py`：主流水线。扫描源文档树（`result/v01/tree`），按"一级目录/二级目录"分组，调用大模型把每组文档合并转换为一个 skill（输出为 `<一级中文>/<二级中文>.md`），并生成 `skill_tree_structure.txt` 与 `conversion_report.json`。散落在一级目录下的文档会自动并入名称最相似的既有二级分组；若该一级目录没有二级目录，则全部合并为 `<一级名去前缀>故障案例.md`（如 `故障处理：QoS` → `QoS故障案例.md`），归并明细会在运行时打印。
 - `skill_case_merge_pipeline.py`：增量并入流水线。读取 `cases/*.json` 里的新故障案例，先定位每个案例组应并入哪个既有 skill（或需要新建），再判定 `covered`（已覆盖）/ `append`（追加小节）/ `create`（新建 skill）并写入，最后输出 `reports/skill_change_report_<mm-dd>.md` 变更说明。`DRY_RUN=True` 只出报告不落盘。
+- `apply_change_report.py`：把人工审过的 `reports/skill_change_report_*.md` 落盘到 skill 目录（追加块拼到文件末尾、新建块写成新文件）。改 `DRY_RUN=False` 重跑会让模型重新生成，落盘的就不是审过的那份，所以审完用这个脚本落盘。默认预演，加 `--apply` 才写文件；追加前比对小节标题，重复执行不会追加两遍。
 - `validate_skills.py`：校验生成的 skill 是否完整合规（frontmatter、截断、残留引用、禁用短语等），存在 ERROR 时退出码为 1。
 - `cases/`：新增故障案例的原始数据（入库）；`reports/`：变更说明，其中运行时生成的 `skill_change_report_*.md` 不入库。
 
