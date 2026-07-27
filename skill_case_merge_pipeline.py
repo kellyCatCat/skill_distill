@@ -79,6 +79,10 @@ MERGE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在把新增的故
 
 # 判断规则
 - covered：新案例的故障现象、根因判据、修复动作，目标skill正文已经全部讲到（用词不同但语义等价也算已覆盖）。此时不要输出任何markdown内容。
+  判covered前必须逐项确认下面几点在skill里都有，只要有一项没有就不能判covered，应判append：
+  1. 新案例的**触发告警**（如hwSrPolicyDown、PW VC Down）在skill里出现过，agent能从告警找到对应排查入口；
+  2. 新案例给出的**管控接口/API**（如 PATCH /rest/xxx）在skill里出现过——skill只写了等价的设备CLI不算覆盖，网管agent走的是接口；
+  3. 新案例的**检查范围**skill里覆盖到了，例如案例要求查源宿两端网元、而skill只查本端，就不算覆盖。
 - append：目标skill已存在，但新案例带来了它没有的根因、判据、命令、修复动作或管控接口。此时只输出需要追加的新小节，不要重复skill里已有的内容，也不要重写整篇skill。
 - create：目标skill不存在（下方"目标skill"为"（不存在，需要新建）"），需要按新案例写一篇完整的skill。
 
