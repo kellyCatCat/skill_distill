@@ -24,26 +24,26 @@
 
 ## 二、需要并入的案例：20 条，14 个案例组
 
-`修复方案`列标注该组案例是否给出了可执行的修复动作；仅能定位到根因的，skill 里只写到根因判定为止。
+下表的"实际落点"来自 2026-07-27 在真实 skill 库（`skills_distilled/07-16`，59 篇）上跑的 DRY-RUN，是定位阶段的实测结果，不再是推测。`修复方案`列标注该组案例是否给出了可执行的修复动作；仅能定位到根因的，skill 里只写到根因判定为止。
 
-| # | 案例组（故障类型） | 根因（来源页） | 触发告警 | 修复方案 | 预期落点 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | ISIS 邻居状态异常 | ISIS System ID 冲突（p5） | IS-IS Adjacency Changed | 有（NCE-IP 分配 System ID） | 追加到既有 IS-IS 类 skill |
-| 2 | OSPF 邻居状态异常 | 两端 IP 不在同一网段（p7）；两端 router-id 冲突（补充信息） | OSPF Neighbor State Changes | 部分（IP 可重分配；router-id 冲突缺诊断步骤，见 3.2） | 追加到既有 OSPF 类 skill |
-| 3 | BGP 邻居状态异常 | Peer IP 不匹配 / as-number 不匹配 / router-id 冲突（p9）；路由环路（p29） | Bgp Peer Backward Transition 等 | 部分（Peer IP 与环路仅定位） | 追加到既有 BGP 类 skill |
-| 4 | BFD 状态异常 | 会话对端 IP 不匹配（p10）；对端标识符不匹配（p12） | BFD Session Down | 部分（标识符可自动修，IP 仅定位） | 视 skill 库有无 BFD 分类：追加或新建 |
-| 5 | LDP 隧道故障 | LDP 未使能（p13） | LDP 会话 Up→Down | 有（全局 + 接口使能 mpls ldp） | 追加到既有 MPLS/LDP 类 skill |
-| 6 | RSVP-TE 隧道故障 | 人工关闭隧道（p15） | MPLS Tunnel Down 等 | 有（undo shutdown / 管控 API） | 追加到既有 MPLS 隧道类 skill |
-| 7 | SR-TE 隧道故障 | 人工关闭隧道（p16） | sr-te policy status has been changed | 有（同上） | 视 skill 库有无 SR 分类：追加或新建 |
-| 8 | SR-Policy 隧道故障 | 人工关闭 SR-Policy（p17） | hwSrPolicyDown | 有（管控 API 置 admin-status up） | 同上 |
-| 9 | SRv6-Policy 隧道故障 | 人工关闭 SRv6-Policy（p19） | hwSrPolicyDown | 有（同上） | 同上 |
-| 10 | PWE3 故障 | PW 远端 IP 不匹配（p20）；MTU 不一致（p21） | PW VC Down | 有（远端地址取对端 LSR ID；MTU 对齐） | 追加到既有 L2VPN 类 skill |
-| 11 | VPLS 故障 | PW 远端 IP 不匹配（p22）；MTU 不一致（p23） | VPLS VC Down | 有（同上，作用在 VSI peer） | 追加到既有 L2VPN 类 skill |
-| 12 | L2EVPN 故障 | 两端 Service ID 不匹配（p24）；二层环路（p30，补充信息） | hwEvpnEvplAlarmDown；hwEvpnMacDupVpnAlarm | 有（remote-service-id 取对端 local；环路按 LDT 告警决定是否 shutdown 子接口） | 追加到既有 L2VPN/EVPN 类 skill |
-| 13 | 1588v2 时钟异常 | P/E 模式不匹配（p26） | PTP_ATTR_MISMATCH | 有（对齐上游 2~3 跳，缺省推 E2E） | 大概率新建（时钟同步是新主题） |
-| 14 | 链路性能越限 | 切片链路带宽利用率过高（p31） | IGP 链路质差 / 带宽利用率越限 | 有（切片链路带宽调整 API） | 大概率新建（性能类是新主题） |
+| # | 案例组（故障类型） | 根因（来源页） | 修复方案 | 实际落点 |
+| --- | --- | --- | --- | --- |
+| 1 | ISIS 邻居状态异常 | ISIS System ID 冲突（p5） | 有（NCE-IP 分配 System ID） | 追加 → `故障处理：IP路由/IS-IS故障案例.md` |
+| 2 | OSPF 邻居状态异常 | 两端 IP 不在同一网段（p7）；两端 router-id 冲突（补充信息） | 部分（IP 可重分配；router-id 冲突缺诊断步骤，见 3.2） | 追加 → `故障处理：IP路由/OSPF故障案例.md` |
+| 3 | BGP 邻居状态异常 | Peer IP / as-number / router-id 冲突（p9）；路由环路（p29） | 部分（Peer IP 与环路仅定位） | 追加 → `故障处理：IP路由/BGP故障案例.md` |
+| 4 | BFD 状态异常 | 会话对端 IP 不匹配（p10）；对端标识符不匹配（p12） | 部分（标识符可自动修，IP 仅定位） | 追加 → `故障处理：网络可靠性/BFD故障案例.md` |
+| 5 | LDP 隧道故障 | LDP 未使能（p13） | 有（全局 + 接口使能 mpls ldp） | 追加 → `故障处理：MPLS/MPLS LDP故障案例.md` |
+| 6 | RSVP-TE 隧道故障 | 人工关闭隧道（p15） | 有（undo shutdown / 管控 API） | 追加 → `故障处理：MPLS/MPLS TE故障案例.md` |
+| 7 | SR-TE 隧道故障 | 人工关闭隧道（p16） | 有（同上） | 追加 → `故障处理：Segment Routing/SR-MPLS TE故障案例.md` |
+| 8 | SR-Policy 隧道故障 | 人工关闭 SR-Policy（p17） | 有（管控 API 置 admin-status up） | 追加 → 同上（与 SR-TE 合并为一次调用） |
+| 9 | SRv6-Policy 隧道故障 | 人工关闭 SRv6-Policy（p19） | 有（同上） | **已覆盖，无需改动** → `故障处理：Segment Routing/SRv6 TE Policy故障案例.md` |
+| 10 | PWE3 故障 | PW 远端 IP 不匹配（p20）；MTU 不一致（p21） | 有（远端地址取对端 LSR ID；MTU 对齐） | **新建** → `故障处理：VPN/PWE3故障案例.md` |
+| 11 | VPLS 故障 | PW 远端 IP 不匹配（p22）；MTU 不一致（p23） | 有（同上，作用在 VSI peer） | 追加 → `故障处理：VPN/VPLS故障案例.md` |
+| 12 | L2EVPN 故障 | 两端 Service ID 不匹配（p24）；二层环路（p30，补充信息） | 有（remote-service-id 取对端 local；环路按 LDT 告警决定是否 shutdown 子接口） | **新建** → `故障处理：VPN/L2EVPN故障案例.md` |
+| 13 | 1588v2 时钟异常 | P/E 模式不匹配（p26） | 有（对齐上游 2~3 跳，缺省推 E2E） | 追加 → `故障处理：时间与时钟同步/1588v2故障案例.md` |
+| 14 | 链路性能越限 | 切片链路带宽利用率过高（p31） | 有（切片链路带宽调整 API） | **新建** → `故障处理：网络可靠性/切片链路性能越限故障案例.md` |
 
-"预期落点"是按故障主题给出的判断，不是最终结论——真实的既有 skill 清单在你的环境里，由流水线定位阶段读取后决定，结果会写进运行时报告。
+定位阶段 14 个案例组全部成功：10 个并入既有 skill、3 个新建、1 个判定已覆盖。之前文档里"视 skill 库有无 XX 分类"的猜测已被实测替换——BFD、Segment Routing、时间与时钟同步这几类既有 skill 都存在，只有 PWE3、L2EVPN、切片链路性能三类确实没有。
 
 ## 三、逐页盘点：37 页的去向
 

@@ -76,7 +76,15 @@ MERGE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在把新增的故
 
 # 内容要求
 <writing_rules>
-- append时：输出一个或多个以"## "开头的小节，小节标题包含根因名称（如"## 场景：ISIS System ID冲突"）；不要输出frontmatter（--- name/description ---）；步骤编号在小节内部从1开始。
+- append时：输出一个或多个以"## "开头的小节，小节标题包含根因名称；不要输出frontmatter（--- name/description ---）；不要输出"# "一级标题；即使目标skill里已有"## "小节，新小节也必须用"## "而不是"### "；步骤编号在小节内部从1开始。追加内容的格式必须形如：
+
+  ## 场景：ISIS System ID冲突
+  （一句话说明该场景的现象与触发告警）
+  1. 第一步……
+  2. 第二步……
+
+  ## 场景：另一个根因
+  ……
 - create时：输出完整skill，以frontmatter开头（name为英文小写+连字符，description为一句话简介），正文以一级标题"# "开始。
 
 # 输出格式
@@ -107,17 +115,65 @@ def _locate_extractor(text: str) -> str:
     return text if decision.get("target") else ""
 
 
-def _merge_extractor(text: str) -> str:
-    try:
-        decision = extract_json_block(text)
-    except (ValueError, json.JSONDecodeError):
-        return ""
+def normalize_append_content(content: str) -> str:
+    """把追加内容规整成"若干个 ## 小节"。
+
+    模型常见的两种偏差：给整段追加内容套一个 `# 一级标题`，或者因为目标skill
+    里已有 `## ` 小节而把新场景写成 `### `。这两种都只是层级问题，内容本身可用，
+    直接抬到 `## ` 即可，不必判失败重跑。
+    """
+    content = re.sub(r"^---\s*\n.*?\n---\s*\n", "", content, count=1, flags=re.DOTALL)
+    lines = content.strip().split("\n")
+    while lines and (not lines[0].strip() or re.match(r"^# +\S", lines[0])):
+        lines.pop(0)
+    content = "\n".join(lines).strip()
+    if not re.search(r"^## +\S", content, re.MULTILINE):
+        # 没有##但有更深层级时整体上提一级，直到出现##小节
+        while re.search(r"^### +\S", content, re.MULTILINE):
+            content = re.sub(r"^#(#+ +\S)", r"\1", content, flags=re.MULTILINE)
+            if re.search(r"^## +\S", content, re.MULTILINE):
+                break
+    return content.strip()
+
+
+def prepare_merge_content(reply: str) -> tuple:
+    """从合并阶段的回复里取出 (判定, 规整后的内容, 错误说明)。"""
+    decision = extract_json_block(reply)
     action = decision.get("action")
     if action == "covered":
-        return text
-    if action in ("append", "create") and extract_markdown_content(text):
-        return text
-    return ""
+        return decision, "", ""
+    content = extract_markdown_content(reply)
+    if action == "append":
+        content = normalize_append_content(content)
+    return decision, content, check_generated_content(action, content)
+
+
+def check_generated_content(action: str, content: str) -> str:
+    """检查生成内容是否可直接落盘，返回错误说明（空串表示通过）。"""
+    content = (content or "").strip()
+    if action == "covered":
+        return ""
+    if not content:
+        return f"action={action} 但没有生成内容"
+    if action == "append":
+        if content.startswith("---"):
+            return "追加内容里带了frontmatter，应只输出小节"
+        if not re.search(r"^## +\S", content, re.MULTILINE):
+            return "追加内容里没有以'## '开头的小节"
+        return ""
+    if action == "create":
+        if not re.match(r"^---\s*\n", content):
+            return "新建skill缺少frontmatter"
+        return ""
+    return f"未知的action: {action!r}"
+
+
+def _merge_extractor(text: str) -> str:
+    """内容不合规时抛异常，让call_model_with_retry重试，并把原因带进最终报错。"""
+    _, content, error = prepare_merge_content(text)
+    if error:
+        raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
+    return text
 
 
 def normalize_case(entry: dict) -> dict:
@@ -378,7 +434,7 @@ def merge_bucket(args: tuple) -> dict:
         result["error"] = reply
         return result
     try:
-        decision = extract_json_block(reply)
+        decision, content, _ = prepare_merge_content(reply)
     except (ValueError, json.JSONDecodeError) as e:
         result["error"] = f"错误：合并结果解析失败: {e}"
         return result
@@ -387,28 +443,13 @@ def merge_bucket(args: tuple) -> dict:
     result["reason"] = decision.get("reason", "")
     result["change_summary"] = decision.get("change_summary", "")
     result["sections"] = decision.get("sections", [])
-    result["content"] = extract_markdown_content(reply)
+    result["content"] = content
     return result
 
 
 def validate_change(result: dict) -> str:
-    """应用前检查生成内容，返回错误说明（空串表示通过）。"""
-    action, content = result.get("action"), (result.get("content") or "").strip()
-    if action == "covered":
-        return ""
-    if not content:
-        return f"action={action} 但没有生成内容"
-    if action == "append":
-        if content.startswith("---"):
-            return "追加内容里带了frontmatter，应只输出小节"
-        if not re.search(r"^## +\S", content, re.MULTILINE):
-            return "追加内容里没有以'## '开头的小节"
-        return ""
-    if action == "create":
-        if not re.match(r"^---\s*\n", content):
-            return "新建skill缺少frontmatter"
-        return ""
-    return f"未知的action: {action!r}"
+    """应用前再检查一次生成内容，返回错误说明（空串表示通过）。"""
+    return check_generated_content(result.get("action"), result.get("content"))
 
 
 def apply_change(result: dict, skill_dir: str, dry_run: bool) -> None:
@@ -451,6 +492,18 @@ def build_report(results: list, skipped: list, locate_errors: list,
         note = r.get("error") or r.get("invalid") or r.get("change_summary") or r.get("reason", "")
         lines.append(f"| `{r['target']}` | {action_label.get(action, action)} | "
                      f"{'、'.join(r['fault_types'])} | {note} |")
+
+    failed = [r for r in results if r.get("error") or r.get("invalid")]
+    if failed:
+        lines += ["", "## 处理失败（未落盘，需重跑）", ""]
+        for r in failed:
+            lines += [f"### `{r['target']}`", "",
+                      f"- 涉及案例组：{'、'.join(r['fault_types'])}",
+                      f"- 失败原因：{r.get('error') or r.get('invalid')}"]
+            if r.get("content"):
+                lines += ["", "<details><summary>模型生成的内容（供排查）</summary>", "",
+                          "````markdown", r["content"].strip()[:4000], "````", "",
+                          "</details>", ""]
 
     for r in results:
         if r.get("action") not in ("append", "create") or r.get("invalid") or r.get("error"):
