@@ -99,7 +99,9 @@ def extract_markdown_content(text: str) -> str:
     return ""
 
 
-def call_model_with_retry(api_url: str, model_name: str, question: str, max_retries: int = 3, retry_delay: float = 1.0) -> str:
+def call_model_with_retry(api_url: str, model_name: str, question: str, max_retries: int = 3,
+                          retry_delay: float = 1.0, extractor=extract_markdown_content) -> str:
+    """extractor 从模型回复中提取有效内容，返回空串表示本次回复无效需重试。"""
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": question}],
@@ -128,7 +130,7 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
             if finish_reason == 'length':
                 raise Exception(f"输出被截断(finish_reason=length)，内容长度{len(content)}字符，请增大max_tokens或拆分输入")
 
-            extracted_content = extract_markdown_content(content)
+            extracted_content = extractor(content)
             if not extracted_content:
                 raise Exception(f"No markdown content found. finish_reason={finish_reason}, 内容长度{len(content)}字符, 开头内容: {content[:200]!r}")
             return extracted_content

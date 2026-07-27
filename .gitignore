@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+result/
+skills_distilled/
+reports/skill_change_report_*.md

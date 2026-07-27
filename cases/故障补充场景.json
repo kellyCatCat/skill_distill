@@ -1,0 +1,390 @@
+{
+  "source": "故障补充场景.pptx",
+  "total_slides": 37,
+  "overview_table": [
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "ISIS邻居状态异常",
+      "故障根因": "ISIS System ID冲突",
+      "诊断": "【自动定位】检查ISIS邻居两端的System ID参数（不能相同），给出故障网元、ISIS进程ID、ISIS错误配置（System ID冲突）",
+      "修复": "【自动生成】自动生成网元正确ISIS配置：在设定的资源池范围内自动分配System ID，确保ISIS域内全局唯一。"
+    },
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "OSPF邻居状态异常",
+      "故障根因": "OSPF Router ID冲突",
+      "诊断": "【自动定位】给出故障网元、OSPF进程ID、OSPF错误配置（Router ID冲突，要求AS内全局唯一）",
+      "修复": "【自动生成】自动生成网元正确OSPF配置：在设定的Router ID资源池范围内分配Router ID，确保全网全局唯一。"
+    },
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "OSPF邻居状态异常",
+      "故障根因": "两端IP不在同一网段",
+      "诊断": "【自动定位】给出故障网元、OSPF进程ID、OSPF错误配置（IP地址不在同一网段）",
+      "修复": "【自动生成】自动分配IP地址，确保两端IP地址在相同网段，且分配的IP在全网唯一；可选择以左端口或右端口的IP地址/网段为准，为另一端分配地址，两种方案由用户选择一个应用。"
+    },
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "BGP邻居状态异常",
+      "故障根因": "as-number不匹配",
+      "诊断": "【自动定位】给出故障网元、BGP Router ID、Peer IP、BGP错误配置（as号不匹配）",
+      "修复": "【自动生成】自动生成正确的BGP配置：根据两端设备的as-number配置，生成as-number修改配置"
+    },
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "BGP邻居状态异常",
+      "故障根因": "BGP Router ID冲突",
+      "诊断": "【自动定位】给出故障网元、BGP Router ID、Peer IP、BGP错误配置（Router ID冲突）",
+      "修复": "【自动生成】自动生成正确的BGP配置：在设定的Router ID资源池范围内分配BGP Router ID，确保全网全局唯一。"
+    },
+    {
+      "故障子类": "路由协议故障",
+      "故障定义": "BGP邻居状态异常",
+      "故障根因": "ISIS路由环路",
+      "诊断": "【自动定位】给出故障网元、发生环路的目的IP、环路路径",
+      "修复": "【自动生成】自动生成正确的路由配置。"
+    },
+    {
+      "故障子类": "BFD状态异常",
+      "故障定义": "BFD状态异常",
+      "故障根因": "BFD对端标识符不匹配",
+      "诊断": "【自动定位】给出故障网元、本地标识符、远端标识符、IP地址、BFD异常原因（标识符不匹配，要求discriminator local与对端discriminator remote一致）",
+      "修复": "【自动生成】自动生成网元正确BFD配置：根据会话两端的discriminator配置，确保discriminator remote与对端的discriminator local一致；"
+    },
+    {
+      "故障子类": "MPLS隧道故障",
+      "故障定义": "RSVP-TE隧道故障",
+      "故障根因": "人工关闭RSVP-TE隧道",
+      "诊断": "【自动定位】给出故障隧道、错误配置（隧道目的地址与对端的LSR ID不匹配）",
+      "修复": "【自动生成】请确认是否启用该隧道，给出隧道启用配置。"
+    },
+    {
+      "故障子类": "MPLS隧道故障",
+      "故障定义": "LDP隧道故障",
+      "故障根因": "LDP未使能",
+      "诊断": "【自动定位】给出故障LDP的会话信息（本/对端网元和接口）、错误配置（MPLS LDP未使能，要求全局使能mpls 和 ldp，接口也使能mpls和LDP）",
+      "修复": "【自动生成】自动生成对应网元的LDP配置：全局使能mpls和ldp，故障会话对应的接口使能mpls和ldp。"
+    },
+    {
+      "故障子类": "Segment Routing隧道故障",
+      "故障定义": "SR-TE隧道故障",
+      "故障根因": "人工关闭SR-TE隧道",
+      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突等）",
+      "修复": "【自动生成】请确认是否启用该隧道，给出隧道启用配置。"
+    },
+    {
+      "故障子类": "Segment Routing隧道故障",
+      "故障定义": "SR-Policy隧道故障",
+      "故障根因": "人工关闭SR Policy",
+      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突，要求SID在IGP域内唯一）",
+      "修复": "【自动生成】请确认是否启用该SR-Policy，给出SR-Policy启用配置。"
+    },
+    {
+      "故障子类": "Segment Routing隧道故障",
+      "故障定义": "SRv6-Policy隧道故障",
+      "故障根因": "人工关闭SRv6 Policy",
+      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突，要求SID在IGP域内唯一）",
+      "修复": "【自动生成】请确认是否启用该SR-Policy，给出SR-Policy启用配置。"
+    },
+    {
+      "故障子类": "L2VPN业务故障",
+      "故障定义": "PWE3故障",
+      "故障根因": "PW远端IP地址不匹配",
+      "诊断": "【自动定位】检查pw源宿两端配置的远端地址是否匹配，给出故障PWE3业务名称、错误配置（远端IP地址不匹配）",
+      "修复": "【自动生成】自动生成对应网元的PWE3正确配置：远端地址默认使用对端的LSR ID。"
+    },
+    {
+      "故障子类": "L2VPN业务故障",
+      "故障定义": "VPLS故障",
+      "故障根因": "PW远端IP地址不匹配",
+      "诊断": "【自动定位】检查pw源宿两端配置的远端地址是否匹配，给出故障VPLS业务名称、错误配置（远端IP地址不匹配）",
+      "修复": "【自动生成】自动生成对应网元的VPLS正确配置：远端地址默认使用对端的LSR ID。"
+    },
+    {
+      "故障子类": "L2VPN业务故障",
+      "故障定义": "L2EVPN故障",
+      "故障根因": "L2EVPN两端Service ID不匹配",
+      "诊断": "【自动定位】给出故障L2EVPN业务名称、源宿网元名称、错误配置（Service ID不匹配）",
+      "修复": "【自动生成】自动生成对应网元的L2EVPN正确配置：remote-service-id使用远端配置的local-service-id。"
+    },
+    {
+      "故障子类": "L2VPN业务故障",
+      "故障定义": "L2EVPN故障",
+      "故障根因": "二层环路",
+      "诊断": "【自动定位】给出故障L2EVPN业务名称、源宿网元名称，说明故障原因为二层环路",
+      "修复": "【自动生成】请检查路由规划方案，确保正确按规划配置"
+    }
+  ],
+  "fault_scenarios": [
+    {
+      "slide": 5,
+      "故障类型": "ISIS邻居状态异常",
+      "根因类型": "ISIS System ID冲突",
+      "触发告警": "IS-IS邻接改变（IS-IS Adjacency Changed)",
+      "故障诊断": "确定故障对象：根据告警和存量资源数据确定ISIS邻居两端设备和端口；查询两端配置：display current-configuration configuration isis <process id>（增加进程号查，避免查询回显太大，查之前先查接口的配置，找到进程号），如左图所示 ；—— 老版本设备查询命令会否有差异从配置信息中提取故障端口对应的ISIS进程的System ID；比较两端System ID是否冲突，要求不能相同，若二者相同则故障根因为ISIS system id冲突；",
+      "方案生成": "1、本端及对端二选一重新配置System ID（默认选择本端），调用NCE-IP接口分配System id；2、NCE-IP自动分配System id，确保ISIS域内全局唯一；约束：仅支持直连的isis邻居down（符合IPRAN解决方案基线），且为邻居两端的system id冲突生成配置样例：isis 1  network-entity 10.0000.0000.0001.00commit —— 是否要生成commit，能否在下发接口里增加commit？",
+      "对管控依赖": "1、isis system id分配接口（isis 进程号）：优先按当前值+1（或-1）分配，若不唯一继续+1，直到找到一个空闲值使用。2、cli配置下发接口（通用接口）；",
+      "备注": "老版本设备查询命令会否有差异从配置信息中提取故障端口对应的ISIS进程的System ID；比较两端System ID是否冲突，要求不能相同，若二者相同则故障根因为ISIS system id冲突；方案生成：1、本端及对端二选一重新配置System ID（默认选择本端），调用NCE-IP接口分配System id；2、NCE-IP自动分配System id，确保ISIS域内全局唯一；约束：仅支持直连的isis邻居down（符合IPRAN解决方案基线），且为邻居两端的system id冲突生成配置样例：isis 1  network-entity 10.0000.0000.0001.00commit; 是否要生成commit，能否在下发接口里增加commit？管控依赖：1、isis system id分配接口（isis 进程号）：优先按当前值+1（或-1）分配，若不唯一继续+1，直到找到一个空闲值使用。2、cli配置下发接口（通用接口）；; 约束: 仅支持直连的isis邻居down（符合IPRAN解决方案基线），且为邻居两端的system id冲突生成配置样例：isis 1  network-entity 10.0000.0000.0001.00commit —— 是否要生成commit，能否在下发接口里增加commit？"
+    },
+    {
+      "slide": 6,
+      "故障类型": "ISIS邻居状态异常",
+      "根因类型": "ISIS两端IP不在同一网段",
+      "触发告警": "IS-IS邻接改变（IS-IS Adjacency Changed)",
+      "故障诊断": "确定故障对象：根据告警和存量资源数据确定ISIS邻居两端设备和端口；查询ISIS邻居两端端口的IP地址和子网掩码（从管控查询）；判断两端IP地址是否在同一网段，若网段不同，则根因为“两端IP不在同一网段”ISIS实验结果：Isis system id冲突：邻居两端之间如果冲突，会邻居down；会报IS-IS系统ID冲突；ISIS  mtu：有条件导致down；mtu值可以不一致，但不能太小，比如 小于1000就会isis 邻居down；IP地址：IP可以不在同一网段（包括p2p, p2mp）已废弃-不会导致邻居down",
+      "方案生成": "",
+      "对管控依赖": "",
+      "备注": "已废弃"
+    },
+    {
+      "slide": 7,
+      "故障类型": "OSPF邻居状态异常",
+      "根因类型": "OSPF两端IP不在同一网段",
+      "触发告警": "OSPF邻居状态改变(OSPF Neighbor State Changes)场景说明：场景1：IPv4单栈场景（改了设备F，在D报告警），一端接口没有地址的场景优先级放低暂不支持场景2：IPv6单栈场景（v6 ospfv3实验室未构建出来，待验证/确认）场景3：IPv4 v6双栈场景",
+      "故障诊断": "确定故障对象：根据告警和存量资源数据确定OSPF邻居两端设备和端口；查询OSPF邻居两端端口的IP地址和子网掩码（从管控查询） ；判断两端IP地址是否在同一网段，若网段不同，则根因为“两端IP不在同一网段”；针对IPv4 v6双栈场景，需要分别判断v4 和 v6 是否都不在相同网段；",
+      "方案生成": "1、自动分配IP地址，确保两端IP地址在相同网段，且分配的IP在全网唯一（根据LTP存量表中IP地址的public/private类型判断公私网，确保在公网内唯一）；可选择以左端口或右端口的IP地址/网段为准，为另一端分配地址，两种方案由用户选择一个应用。——全网唯一，可能存在少量设备未纳管、或同步不及时，导致按存量判断唯一性不准确2、要考虑掩码不相同的场景，优选按掩码长的一端分、且掩码不能是32位；ipv6同理（推荐126位掩码）；——需要考虑两端都报了告警的场景，避免出现左边右边分别触发改了两次；另外，如何避免把符合用户规划意图的一端修改掉？生成配置样例：interface GigabitEthernet0/2/0  undo ip address xxx  ip address 172.17.1.1 255.255.255.0commit",
+      "对管控依赖": "1、端口IP地址查询接口（存量已ready）2、修改ip地址接口（把undo 和 新地址包装在一个报文下发）P2MPNE1NE2NE3NE4P2PDeviceD的配置文件#sysname DeviceD#router id 4.4.4.4#interface GigabitEthernet0/1/0 undo shutdown ip address 192.168.2.2 255.255.255.0#interface GigabitEthernet0/2/0 undo shutdown ip address 172.17.1.7 255.255.255.254#ospf 1 area 0.0.0.2  network 192.168.2.0 0.0.0.255  network 172.17.1.0 0.0.0.255#returnDeviceF的配置文件#sysname DeviceF#router id 6.6.6.6#interface GigabitEthernet0/2/0 undo shutdown ip address 172.17.1.2 255.255.255.254#ospf 1 area 0.0.0.2  network 172.17.1.0 0.0.0.255#return配置举例：",
+      "备注": "全网唯一，可能存在少量设备未纳管、或同步不及时，导致按存量判断唯一性不准确2、要考虑掩码不相同的场景，优选按掩码长的一端分、且掩码不能是32位；ipv6同理（推荐126位掩码）；; 需要考虑两端都报了告警的场景，避免出现左边右边分别触发改了两次；另外，如何避免把符合用户规划意图的一端修改掉？生成配置样例：interface GigabitEthernet0/2/0  undo ip address xxx  ip address 172.17.1.1 255.255.255.0commit对管控依赖：1、端口IP地址查询接口（存量已ready）2、修改ip地址接口（把undo 和 新地址包装在一个报文下发）; 场景说明: 场景1：IPv4单栈场景（改了设备F，在D报告警），一端接口没有地址的场景优先级放低暂不支持场景2：IPv6单栈场景（v6 ospfv3实验室未构建出来，待验证/确认）场景3：IPv4 v6双栈场景"
+    },
+    {
+      "slide": 9,
+      "故障类型": "BGP邻居状态异常",
+      "根因类型": "BGP Peer IP不匹配、as-number不匹配、router-id冲突，三个根因中的一种",
+      "触发告警": "BGP连接中断(Bgp Peer Backward Transition)，BGP状态改变告警（BGP Status Changed），BGP邻居不可用（Bgp Peer Unavailable）",
+      "故障诊断": "确定故障对象：根据告警确定本端网元、bgp peer对端ip；根据对端ip查找接口存量资源找到对端网元和接口，若找不到对端网元和接口（在公网平面内查找），则判断根因为peer ip不匹配；找到对端，则获取本/对端bgp相关配置：通过命令行display current-configuration configuration bgp获取对端bgp配置，检查对端设备所有bgp peer的ip地址，是否存在本端网元的接口有配置相同的IP地址，若无则根因为peer ip不匹配（对端网元不存在到本端的bgp peer配置），否则继续下一步；通过命令行display current-configuration configuration bgp获取本端bgp配置，检查故障peer对应的as-number配置是否相互匹配；检查router-id是否冲突；场景约束：只支持公网面的BGP peer故障诊断，对端也在管理范围内（当对端不在管理范围内时，不支持诊断和修复），本对端之间v4、v6分别最多只有一个bgp peer（符合解决方案配置基线）；DeviceC的配置文件#interface GigabitEthernet0/3/0 undo shutdown ip address 10.1.3.2 255.255.255.0#interface LoopBack0 ip address 3.3.3.3 255.255.255.255#bgp 65009 router-id 4.4.4.4 peer 2.2.2.2 as-number 65008 peer 2.2.2.2 connect-interface LoopBack0 peer 4.4.4.5 as-number 65009 peer 4.4.4.4 connect-interface LoopBack0 # ipv4-family unicast  undo synchronization   peer 2.2.2.2 enable  peer 4.4.4.4 enable#DeviceD的配置文件#interface LoopBack0 ip address 4.4.4.4 255.255.255.255#bgp 65009 router-id 4.4.4.4 peer 2.2.2.2 as-number 65009 peer 2.2.2.2 connect-interface LoopBack0 peer 3.3.3.3 as-number 65009 peer 3.3.3.3 connect-interface LoopBack0 # ipv4-family unicast  undo synchronization   peer 2.2.2.2 enable  peer 3.3.3.3 enable#API：1、确定本端、对端网元/peer ip：      -输入：incident，或 告警；      -输出：本端网元、bgp peer IP，对端网元、bgp peer ipCLI：1、display current-configuration configuration bgpBGP Peer Down E2E流程：收到peer down告警  生成incident  确定本端、对端网元/peer ip(API)  硬件故障排查 (cot） 获取本端、对端bgp peer配置（Skill-by NL2CLI）  配置裁剪（找出故障peer相关的）（免） 配置问题分析（Skill）  修复配置生成",
+      "方案生成": "Peer IP不匹配（NA，人工远程修复）、as-number不匹配（自动修复）、router-id冲突（自动修复） ；1、router-id冲突：本端及对端二选一重新配置router-id（默认选择本端），调用NCE-IP接口分配router-id；NCE-IP基于router-id资源池自动分配（需要提前配置好资源池范围），确保全局唯一；2、as-number不匹配：peer的as-number配置修改为对端设备的as-number值；生成配置样例：system-viewbgp 65009  —— 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3 —— 修改router-id peer 2.2.2.2 as-number 65009 —— 修改as-numbercommit对管控的依赖：bgp router-id分配接口（按资源池分配）---当前无router-id资源池；（思路1：取lsr-id，求助设备专家对一下）",
+      "对管控依赖": "",
+      "备注": "约束: 只支持公网面的BGP peer故障诊断，对端也在管理范围内（当对端不在管理范围内时，不支持诊断和修复），本对端之间v4、v6分别最多只有一个bgp peer（符合解决方案配置基线）；; 设备已有配置，直接使用，进入bgp视图 router-id 3.3.3.3; 修改router-id peer 2.2.2.2 as-number 65009; 修改as-numbercommit对管控的依赖：bgp router-id分配接口（按资源池分配）---当前无router-id资源池；（思路1：取lsr-id，求助设备专家对一下）"
+    },
+    {
+      "slide": 10,
+      "故障类型": "BFD状态异常",
+      "根因类型": "BFD会话对端IP不匹配",
+      "触发告警": "BFD Session Down故障说明：针对bfd for ipv4、bfd for ipv6两种场景，peer ip要求互指，在接口IP地址被修改、或bfd配置变更时，可能导致peer ip不匹配引发session down",
+      "故障诊断": "确定故障对象：根据告警确定本端网元、bfd session对端ip；根据对端ip查找接口存量资源找到对端网元和接口，若找不到对端网元和接口，则判断根因为peer ip不匹配；找到对端，则获取对端bfd相关配置：通过命令行display current-configuration configuration bfd获取对端bfd配置，检查对端设备所有bfd session的peer ip地址，是否存在本端网元的接口有配置相同的IP地址，若无则根因为Peer IP不匹配（对端网元不存在到本端的bfd peer配置）； —— 待确认：两端之间存在多个bfd 会话的场景，如何找到对端是哪一个session？（可根据标识符匹配关系判断）",
+      "方案生成": "NA，人工远程修复DeviceA的配置文件#sysname DeviceA#bfd#interface GigabitEthernet0/1/0 undo shutdown ip address 10.1.1.1 255.255.255.0#ip route-static 10.2.1.0 255.255.255.0 10.1.1.2#bfd atoc1 bind peer-ip 10.2.1.4 discriminator local 10 discriminator remote 20returnDeviceC的配置文件#sysname DeviceC#bfd#interface GigabitEthernet0/1/0 undo shutdown ip address 10.2.1.2 255.255.255.0#ip route-static 10.1.1.0 255.255.255.0 10.2.1.1#bfd ctoa1 bind peer-ip 10.1.1.3 discriminator local 20 discriminator remote 10bfd ctoa2 bind peer-ip 10.1.2.1   discriminator local 22 returnbfd for ipv4举例：bfd for ipv6举例：",
+      "对管控依赖": "",
+      "备注": "待确认：两端之间存在多个bfd 会话的场景，如何找到对端是哪一个session？（可根据标识符匹配关系判断）方案生成：NA，人工远程修复"
+    },
+    {
+      "slide": 11,
+      "type": "supplementary",
+      "raw_title": "物理上线路错连，影响ospf场景"
+    },
+    {
+      "slide": 12,
+      "故障类型": "BFD状态异常",
+      "根因类型": "BFD对端标识符不匹配",
+      "触发告警": "BFD Session Down",
+      "故障诊断": "确定故障对象：根据告警确定本端网元、bfd session对端ip；根据对端ip查找接口存量资源找到对端网元和接口；获取bfd相关配置：通过命令行display current-configuration configuration bfd获取本端、及对端bfd配置；配置检查：分别检查故障session两端设备配置的local和remote 标识符是否匹配（要求discriminator local与对端discriminator remote一致），若不匹配则找到错误点；检查本端的本地标识符和远端标识符是否匹配display bfd session all verbose | section include {sessionName}，sessionName为BFD名称检查远端：display bfd session discriminator {discriminator} verbose，discriminator为本端的Remote Discriminator，如果在对端设备没查出Local Discriminator和Remote Discriminator，直接给出不匹配结论",
+      "方案生成": "1、针对remote标识符错误的一端生成配置，remote标识符的值直接取对端的local配置值；2、提供修改BFD信息接口：/rest/vpnexpansionservice/v1/bfd/sessions/modify 入参：网元ID，BFD名称，本端标识符，远端标识符，返回修改结果成功3、BFD修复命令行bfd session-name //  进入指定bfddiscriminator local discr-value // 配置BFD会话的本地标识符。discriminator remote discr-value // 配置BFD会话的远端标识符。BFD会话两端设备的本地标识符和远端标识符需要分别对应，即本端的本地标识符与对端的远端标识符相同，否则会话无法正确建立。DeviceA的配置文件#sysname DeviceA#bfd#interface GigabitEthernet0/1/0 undo shutdown ip address 10.1.1.1 255.255.255.0#ip route-static 10.2.1.0 255.255.255.0 10.1.1.2#bfd atoc1 bind peer-ip 10.2.1.2 discriminator local 10 discriminator remote 20bfd atoc2 bind peer-ip 10.2.2.2 discriminator local 11 discriminator remote 22returnDeviceC的配置文件#sysname DeviceC#bfd#interface GigabitEthernet0/1/0 undo shutdown ip address 10.2.1.2 255.255.255.0#ip route-static 10.1.1.0 255.255.255.0 10.2.1.1#bfd ctoa1 bind peer-ip 10.1.1.1 discriminator local 20 discriminator remote 10bfd ctoa2 bind peer-ip 10.1.2.2 discriminator local 22 discriminator remote 11 ---如何避免session残留影响？returnbfd for ipv4举例：bfd for ipv6举例：",
+      "对管控依赖": "",
+      "备注": ""
+    },
+    {
+      "slide": 13,
+      "故障类型": "LDP隧道故障",
+      "根因类型": "LDP未使能",
+      "触发告警": "LDP会话状态由Up变为Down场景说明：LDP配置正确状态下，LDP session已经建立成功，误删除配置导致session down；",
+      "故障诊断": "确定故障对象：根据告警确定LDP会话down的设备和接口；确定对端：根据告警的接口和链路数据，确定对端设备和接口；检查全局LDP配置：使用命令行display current-configuration configuration mpls-ldp，查询本端、对端网元的LDP配置，检查是否全局使能了mpls ldp，若无配置则根因为全局mpls ldp未使能；检查接口LDP配置：使用命令行display current-configuration interface if-number，查询本端、对端接口的LDP配置，检查是否在接口下使能了mpls ldp，若无配置则根因为接口mpls ldp未使能；",
+      "方案生成": "1、全局LDP配置：mpls ldp2、接口LDP配置：interface GigabitEthernet0/1/0  mpls  mpls ldp POST /rest/nemgrpnftetunnelservice/v1/ldp/action/config{\r\t\"restId\":\"3534fd3f-0ae3-404d-8c58-7f38232172bf\",\r\t\"ldpEnable\": true\r\tltpIds: [\r\t  {\r\t\t\"ltpId\": \"df4ec195-6a44-4488-a04d-3581ffb9c0a1\",\r\t\t\"ldpEnable\": \"true\"\r\t  }\r\t]}配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172368561LSRA的配置文件#sysname LSRA#mpls lsr-id 1.1.1.9#mpls#mpls ldp # ipv4-family#interface GigabitEthernet0/1/0 undo shutdown ip address 10.1.1.1 255.255.255.252 mpls mpls ldp#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#ospf 1 area 0.0.0.0  network 1.1.1.9 0.0.0.0  network 10.1.1.0 0.0.0.3#returnLSRB的配置文件#sysname LSRB#mpls lsr-id 2.2.2.9#mpls#mpls ldp # ipv4-family#interface GigabitEthernet0/1/0 undo shutdown ip address 10.1.1.2 255.255.255.252 mpls mpls ldp#interface GigabitEthernet0/2/0 undo shutdown ip address 10.2.1.1 255.255.255.252 mpls mpls ldp#interface LoopBack1 ip address 2.2.2.9 255.255.255.255#ospf 1 area 0.0.0.0  network 2.2.2.9 0.0.0.0  network 10.1.1.0 0.0.0.3  network 10.2.1.0 0.0.0.3#return全局使能LDP接口使能LDPCLI查询接口配置示例：CLI查询LDP全局配置示例：",
+      "对管控依赖": "ldp使能配置生成接口，包括全局使能、接口使能约束：针对直连场景，诊断支持单链路、多链路ldp互联，修复只支持单链路场景（原因：跟规划相关，无法确定哪些链路需要使能ldp）；针对远端ldp场景，实验室未构造出ldp down故障，待确认；",
+      "备注": "约束: 针对直连场景，诊断支持单链路、多链路ldp互联，修复只支持单链路场景（原因：跟规划相关，无法确定哪些链路需要使能ldp）；针对远端ldp场景，实验室未构造出ldp down故障，待确认；; 场景说明: LDP配置正确状态下，LDP session已经建立成功，误删除配置导致session down；"
+    },
+    {
+      "slide": 15,
+      "故障类型": "RSVP-TE隧道故障",
+      "根因类型": "人工关闭RSVP-TE隧道",
+      "触发告警": "MPLS隧道Down（MPLS Tunnel Down），MPLS隧道故障（MPLS Tunnel Failure），TE tunnel变为down（The TE tunnel Changes to Down）",
+      "故障诊断": "1、确定故障对象：根据告警确定故障的网元和隧道对象、隧道接口；2、查询隧道接口配置：使用命令display current-configuration interface <tunnel接口名>查询隧道配置；3、根因识别：根据命令回显，分析是否存在\"shutdown\"，若存在则根因为人工关闭RSVP-TE隧道；CLI查询接口配置示例：[~Core_RT6]dis current-configuration interface Tunnel9026#interface Tunnel9026\r shutdown\r tunnel-protocol mpls te\r destination 8.37.201.94\r mpls te record-route label\r mpls te tunnel-id 1\r mpls te pce delegate#return设备上隧道被人工关闭：",
+      "方案生成": "提供api开启隧道，给设备tunnel配置undo shutdownPATCH /rest/iptunnelservice/v1/te-tunnel/action/modify-tunnel入参：{\r  \"id\": \"3534fd3f-0ae3-404d-8c58-7f38232172bf\",\r  \"tunnels\": [\r    {\r      \"id\": \"df4ec195-6a44-4488-a04d-3581ffb9c0a1\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功",
+      "对管控依赖": "",
+      "备注": ""
+    },
+    {
+      "slide": 16,
+      "故障类型": "SR-TE隧道故障",
+      "根因类型": "人工关闭SR-TE隧道",
+      "触发告警": "sr-te policy status has been changed",
+      "故障诊断": "1、确定故障对象：根据告警确定故障的网元和隧道对象、隧道接口；2、查询隧道接口配置：使用命令display current-configuration interface <tunnel接口名>查询隧道配置；3、根因识别：根据命令回显，分析是否存在\"shutdown\"，若存在则根因为人工关闭RSVP-TE隧道；",
+      "方案生成": "提供api开启隧道，给设备tunnel配置undo shutdownPATCH /rest/iptunnelservice/v1/te-tunnel/action/modify-tunnel入参：{\r  \"id\": \"3534fd3f-0ae3-404d-8c58-7f38232172bf\",\r  \"tunnels\": [\r    {\r      \"id\": \"df4ec195-6a44-4488-a04d-3581ffb9c0a1\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功",
+      "对管控依赖": "1、隧道管理态配置下发接口：enableSRTETunnel(tunnel标识)",
+      "备注": ""
+    },
+    {
+      "slide": 17,
+      "故障类型": "SR-Policy隧道故障",
+      "根因类型": "人工关闭SR-Policy",
+      "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
+      "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy管理状态信息：获取policy源宿两端网元的policy管理状态（调用管控接口）；故障判断：若policy管理状态为down，则根因为人工管理SR-Policy。--拿不到正确的管理状态？ 怎么不和rsvp一样走命令行查看回显？",
+      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功baocang继续梳理下完整流程",
+      "对管控依赖": "1、接口1：SRPolicy对象信息查询接口，根据告警中的目的地址和color查找policy名称，以及源宿两端网元的sid2、SR-Policy管理状态修复接口CLI查询接口配置示例：设备上隧道被人工关闭：",
+      "备注": ""
+    },
+    {
+      "slide": 18,
+      "type": "supplementary",
+      "raw_title": "SR-Policy隧道故障：人工关闭SR Policy"
+    },
+    {
+      "slide": 19,
+      "故障类型": "Rv6-Policy隧道故障",
+      "根因类型": "人工关闭SRv6-Policy",
+      "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
+      "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy管理状态信息：获取policy源宿两端网元的policy管理状态（调用管控接口）；故障判断：若policy管理状态为down，则根因为人工管理SR-Policy。--拿不到正确的管理状态",
+      "方案生成": "提供api开启隧道，给设备sr policy配置undo shutdownPATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy入参：{\r  \"id\": \"21135ce1-4d94-4034-9de4-ecbb783e41f0\",\r  \"policys\": [\r    {\r      \"id\": \"0284b470-7e7c-49ce-b7d4-c59c8995f5ea\",\r      \"admin-status\": \"up\"\r    }\r  ]}响应：200表示成功bao cang梳理下完整流程",
+      "对管控依赖": "1、接口1：srv6policy配置信息查询接口，包括源宿两端网元的sid、两端网元的Policy管理状态；2、管理态修复接口",
+      "备注": ""
+    },
+    {
+      "slide": 20,
+      "故障类型": "PWE3故障",
+      "根因类型": "PW远端IP地址不匹配",
+      "触发告警": "PW VC状态Down告警(PW VC Down) （封装类型，mtu，接口down，隧道down）",
+      "故障诊断": "确定故障对象：根据告警确定PWE3业务故障的设备；查业务信息：调用NCE-IP接口，查询PWE3业务的配置信息，包括源宿两端网元，以及两端网元各自的l2vc配置；—— 返回无法找到对端，根据返回结果判断根因为远端IP地址不匹配检查本端配置问题：检查l2vc远端ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的l2vc远端ip地址正确，则检查对端l2vc远端ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；",
+      "方案生成": "1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口—— 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
+      "对管控依赖": "",
+      "备注": "返回无法找到对端，根据返回结果判断根因为远端IP地址不匹配检查本端配置问题：检查l2vc远端ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的l2vc远端ip地址正确，则检查对端l2vc远端ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；方案生成：1、生成mpls l2vc配置，远端ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备的lsr-id（配置mpls lsr-id 1.1.1.1），或是某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供PWE3业务配置生成接口，故障agent调用该接口生成配置。接口：fixPwe3IpAddress(pwe3业务标识, errNe）对管控的依赖：1、PWE3业务配置修复接口，PWE3业务信息查询接口; 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页"
+    },
+    {
+      "slide": 21,
+      "故障类型": "PWE3故障",
+      "根因类型": "PW远端IP地址不匹配",
+      "触发告警": "PW VC状态Down告警(PW VC Down) （封装类型，mtu，接口down，隧道down）",
+      "故障诊断": "已支持",
+      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的接口，然后去接口下修改MTU的值。接口：fixPwe3Mtu(pwe3业务标识, 要修改的网元，mtu值）对管控的依赖：1、PWE3业务信息查询接口（已有，通过存量查询）2、PW mtu参数修复接口：fixPwMtu(xx)—— 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
+      "对管控依赖": "",
+      "备注": "可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页"
+    },
+    {
+      "slide": 22,
+      "故障类型": "VPLS故障",
+      "根因类型": "PW远端IP地址不匹配",
+      "触发告警": "VPLS VC状态Down（VPLS VC Down）（vsi的封装类型，mtu，接口down，隧道down）",
+      "故障诊断": "确定故障对象：根据告警确定VPLS业务故障的设备和业务对象；查业务信息：调用NCE-IP接口，查询VPLS业务的配置信息，包括源宿两端网元，以及两端网元各自的vsi下的peer的配置；检查本端配置问题：检查vsi的peer的ip地址是否在对端设备上存在，若无匹配的ip地址，则根因为远端ip地址不匹配；检查对端配置问题：若本端配置的vsi的peer的ip地址正确，则检查对端vsi的peer的ip地址是否在本端设备上存在，若无匹配的ip地址，则根因为对端网元的PW远端ip地址不匹配；",
+      "方案生成": "1、生成vsi的peer的配置，ip地址取对端的lsr-id的ip地址；2、生成配置之前检查对端设备的lsr-id的有效性，确保配置正确，检查逻辑：对端lsr-id应该是对端设备上某个接口的ip地址，检查是否存在一个接口ip与lsr-id相同，若不存在则lsr-id无效，生成配置失败；若存在则生成成功。3、配置生成的实现方法：由管控提供VPLS业务配置生成接口，故障agent调用该接口生成配置。接口：fixVplsIpAddress(VPLS业务标识, errNe, peerNe）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口—— 可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页",
+      "对管控依赖": "",
+      "备注": "可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页"
+    },
+    {
+      "slide": 23,
+      "故障类型": "VPLS故障",
+      "根因类型": "PW远端IP地址不匹配",
+      "触发告警": "VPLS VC状态Down（VPLS VC Down）（vsi的封装类型，mtu，接口down，隧道down）",
+      "故障诊断": "已支持",
+      "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的Vsi，然后去vsi下修改MTU的值。接口：fixVplsMtu(VPLS业务标识, 网元, mtu）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口—— 可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页问题：是否存在1对多mtu不一致的情况？",
+      "对管控依赖": "",
+      "备注": "可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页问题：是否存在1对多mtu不一致的情况？"
+    },
+    {
+      "slide": 24,
+      "故障类型": "L2EVPN故障",
+      "根因类型": "L2EVPN两端Service ID不匹配",
+      "触发告警": "EVPN_1.3.6.1.4.1.2011.5.25.356.1.1.2.5 hwEvpnEvplInstDown  --  事件 ，ID：2617096，EVPL实例状态变为down。EVPN_1.3.6.1.4.1.2011.5.25.356.1.1.2.12 hwEvpnEvplAlarmDown  --  告警 ， ID：2622075，EVPL实例状态Down告警根因：（1）没有绑定EVPN实例（2）没有远端EVIAD路由  --- L2EVPN两端Service ID不匹配\r  （3）依赖的ES AD路由没有（4）下一跳不可达（5）其他原因（6）接口DOWN（7）mtu不匹配（8）控制字不匹配（9）流标签不匹配",
+      "故障诊断": "确定故障对象：根据告警确定发生L2EVPN故障的设备和业务标识；查业务信息：查询L2EVPN业务对象信息（管控提供接口 -- 网元ID+evpl key值（对应设备instance id，对应告警：\"moi\": \"EVPL索引=8\",），返回：业务ID，业务名称，源宿网元remote-serice-id和local-service-id。接口mtu,管理状态，evi基本配置；检查配置正确性：检查源宿端PE之间的service-id配置是否匹配（本端配的remote-service-id等于对端配置的local-service-id），若不匹配则根因为service-id不匹配；",
+      "方案生成": "1、针对remote-service-id配置错误的一端（根据上一步定位结果确定，看上报告警的设备），生成remote-service-id配置，值取对端配置的local-service-id；2、配置生成的实现方法：由管控提供L2EVPN业务配置生成接口，故障agent调用该接口生成配置。",
+      "对管控依赖": "1、查询接口：参考上面描述，待补充；2、修复接口：fixL2evpnRemoteServiceId(L2EVPN业务标识，网元ID）。按照peerNe的配置修改errNe的配置。接口实现逻辑需要对ID先删后增处理。走build-in的API处理配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172370603PE1的配置文件#sysname PE1#evpn vpn-instance evrf1 vpws route-distinguisher 100:1 local-remote frr enable vpn-target 1:1 export-extcommunity vpn-target 1:1 import-extcommunity#evpl instance 1 evpn binding vpn-instance evrf1 local-service-id 100 remote-service-id 200#mpls lsr-id 1.1.1.1#               mpls#mpls ldp#interface GigabitEthernet0/1/0 undo shutdown esi 0001.0002.0003.0004.0005        #interface GigabitEthernet0/1/0.1 mode l2 encapsulation dot1q vid 1 evpl instance 1#interface LoopBack1 ip address 1.1.1.1 255.255.255.255#evpn source-address 1.1.1.1#returnPE3的配置文件#sysname PE3#evpn vpn-instance evrf1 vpws route-distinguisher 100:3 vpn-target 1:1 export-extcommunity vpn-target 1:1 import-extcommunity#evpl instance 1 evpn binding vpn-instance evrf1 local-service-id 200 remote-service-id 100#mpls lsr-id 4.4.4.4#interface GigabitEthernet0/2/0.1 mode l2 encapsulation dot1q vid 1 evpl instance 1#interface LoopBack1 ip address 4.4.4.4 255.255.255.255#evpn source-address 4.4.4.4#return",
+      "备注": ""
+    },
+    {
+      "slide": 25,
+      "type": "supplementary",
+      "raw_title": "15、L2EVPN故障：L2EVPN两端Service ID不匹配"
+    },
+    {
+      "slide": 26,
+      "故障类型": "1588v2时钟异常",
+      "根因类型": "P/E模式不匹配",
+      "触发告警": "PE模式不匹配/domain不匹配告警（PTP_ATTR_MISMATCH）",
+      "故障诊断": "确定故障对象：根据告警确定时钟失锁的设备及端口（PE模式不匹配告警中包含端口）；确定对端：通过存量链路获取对端网元；获取时钟配置：查询故障设备及其上游设备的时钟配置，包括P/E模式配置；检查配置问题：检查故障设备与其上游设备之间的P/E模式是否一致，若不一致则根因为时钟P/E模式不匹配；",
+      "方案生成": "1、通过",
+      "对管控依赖": "1、1588v2时钟配置查询：指定网元查询时钟配置，包括P/E模式、domain、跟踪口等；      查询接口：POST /rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/query-clock-info2、1588时钟配置下发：配置接口上的P/E模式     配置接口：POST /rest/rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/set-clock-info配置参考：相关专家：IP：张旭z00642474, lixiaotengPE1的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable ptp delay-mechanism delay（默认值）\r ptp enable#returnPE2的配置文件#sysname PE1#ptp enableptp domain 24ptp device-type bcclock ssm-control on#interface GigabitEthernet0/3/7\r undo shutdown\r set flow-stat interval 10\r dcn\r clock synchronization enable\r clock priority 10 ptp delay-mechanism pdelay ptp enable#returnPE模式配置在端口上： ptp delay-mechanism delay——P2P模型 ptp delay-mechanism pdelay——E2E模式",
+      "备注": "找上游的方法：查询管控接口获取当前设备跟踪口，再根据存量链路获取对端网元，重复此步骤2、往上找2~3跳（查时钟协议决策选择的上游跟踪端口），P/E模式值跟上面几跳保持一致；若上面几跳也不统一，或已经是第一跳，则优先推荐E2E模式（两端都是E2E就没问题）。3、排除对接三方设备场景，如果查询设备配置是空的，那么是不支持的设备对管控依赖：1、1588v2时钟配置查询：指定网元查询时钟配置，包括P/E模式、domain、跟踪口等；      查询接口：POST /rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/query-clock-info2、1588时钟配置下发：配置接口上的P/E模式     配置接口：POST /rest/rest/emvpndriverservice/v1/clocksync/ptp-configuration/action/set-clock-info; P2P模型 ptp delay-mechanism pdelay; E2E模式"
+    },
+    {
+      "slide": 27,
+      "type": "supplementary",
+      "raw_title": "BGP Peer Down故障：ISIS路由环路"
+    },
+    {
+      "slide": 28,
+      "type": "supplementary",
+      "raw_title": "案例：ISIS路由环路"
+    },
+    {
+      "slide": 29,
+      "故障类型": "BGP邻居状态异常",
+      "根因类型": "路由环路",
+      "触发告警": "BGP连接中断(Bgp Peer Backward Transition)，BGP状态改变告警（BGP Status Changed），BGP邻居不可用（Bgp Peer Unavailable）",
+      "故障诊断": "确定故障对象：根据告警确定本端网元、bgp peer对端ip；根据对端ip查找接口存量资源找到对端网元和接口；连通性检测：从本端发起对bgp peer ip的ping测试，通过-a指定ping源地址为bgp peer本端ip；若ping检测异常，则发起路径探测，执行命令tracert -a <bgp local ip> <bgp peer ip>；分析tracert结果是否存在环路：tracert返回的路径中hop ip地址重复出现，可使用LLM自动分析tracert回显判断，并给出环路发生的位置；定位导致环路的配置：待定（涉及网络级跨设备的路由配置分析，针对isis路由多进程互引场景，可能导致环路的配置涉及路由策略/cost值规划等比较灵活的配置，需要分析路由配置逻辑关系，建议采用仿真验证技术）",
+      "方案生成": "",
+      "对管控依赖": "",
+      "备注": ""
+    },
+    {
+      "slide": 30,
+      "type": "supplementary",
+      "raw_title": "18、L2VPN业务故障：二层环路"
+    },
+    {
+      "slide": 31,
+      "故障类型": "链路性能越限",
+      "根因类型": "切片链路带宽利用率过高",
+      "触发告警": "igp链路质差（twamp丢包告警、 igp链路带宽利用率越限、igp链路对应切片接口带宽利用率越限、igp链路对应接口带宽利用率越限） —— 默认切片是否要监控；sliceid切片口上不配置ip地址，此时IGP link如何对应到切片链路上，存量对应哪个数据IP链路跟IGP链路类似，但使用较少，暂不支持",
+      "故障诊断": "1. 判断igp链路接口是否切片接口（链路的slice id不为空）—— 是否有不存在切片id的切片口？是否考虑这个场景2. 如果是切片接口， 2.1 检查igp链路对应端口的带宽利用率是否越限（链路两端端口的Bandwidth Utilization，两端收发方向最大值比较）  2.2 检查igp链路对应物理端口的带宽利用率是否越限3. 如果不是切片接口，检查igp链路对应端口的带宽利用率是否越限（链路两端端口的Bandwidth Utilization，CIR Bandwidth Utilization，两端收发方向最大值比较） —— qos配置限速带宽和物理接口带宽不一致的场景是否需要支持●",
+      "方案生成": "1、通过管控提供的切片链路带宽查询API，查询逻辑链路的带宽值，链路剩余的带宽值，链路类型包括FlexE链路、信道化链路两种2、根据当前的带宽利用率（分析采集），逻辑链路带宽值，链路剩余的带宽值，生成出需要调整到的目标带宽 —— 确认默认切片需要保留的最低限度3、通过管控提供的切片链路带宽配置API，调整目标链路的带宽值到生成的带宽",
+      "对管控依赖": "1、逻辑链路带宽查询API，入参为逻辑链路的resId，响应为逻辑链路的resId，链路带宽，链路剩余的带宽值，链路类型（包括FlexE链路、信道化链路）。2、逻辑链路带宽配置API，支持指定链路进行带宽调整，入参为逻辑链路的resId，目标带宽值，响应为逻辑链路的resId，调整前链路带宽，调整后链路带宽，调整失败的原因（成功场景为空）链路带宽利用率高，如何定位飙高原因，业务是否符合预期；当前方式：wireshark等网络工具抓包，定位哪些流量（五元组）占用接口带宽，例如列出TOP5",
+      "备注": "默认切片是否要监控；sliceid切片口上不配置ip地址，此时IGP link如何对应到切片链路上，存量对应哪个数据IP链路跟IGP链路类似，但使用较少，暂不支持故障诊断：1. 判断igp链路接口是否切片接口（链路的slice id不为空）; 是否有不存在切片id的切片口？是否考虑这个场景2. 如果是切片接口， 2.1 检查igp链路对应端口的带宽利用率是否越限（链路两端端口的Bandwidth Utilization，两端收发方向最大值比较）  2.2 检查igp链路对应物理端口的带宽利用率是否越限3. 如果不是切片接口，检查igp链路对应端口的带宽利用率是否越限（链路两端端口的Bandwidth Utilization，CIR Bandwidth Utilization，两端收发方向最大值比较）; qos配置限速带宽和物理接口带宽不一致的场景是否需要支持●方案生成：1、通过管控提供的切片链路带宽查询API，查询逻辑链路的带宽值，链路剩余的带宽值，链路类型包括FlexE链路、信道化链路两种2、根据当前的带宽利用率（分析采集），逻辑链路带宽值，链路剩余的带宽值，生成出需要调整到的目标带宽; 确认默认切片需要保留的最低限度3、通过管控提供的切片链路带宽配置API，调整目标链路的带宽值到生成的带宽对管控依赖：1、逻辑链路带宽查询API，入参为逻辑链路的resId，响应为逻辑链路的resId，链路带宽，链路剩余的带宽值，链路类型（包括FlexE链路、信道化链路）。2、逻辑链路带宽配置API，支持指定链路进行带宽调整，入参为逻辑链路的resId，目标带宽值，响应为逻辑链路的resId，调整前链路带宽，调整后链路带宽，调整失败的原因（成功场景为空）链路带宽利用率高，如何定位飙高原因，业务是否符合预期；当前方式：wireshark等网络工具抓包，定位哪些流量（五元组）占用接口带宽，例如列出TOP5"
+    },
+    {
+      "slide": 33,
+      "故障类型": "隧道故障",
+      "根因类型": "LSR ID不匹配",
+      "触发告警": "MPLS隧道Down（MPLS Tunnel Down），MPLS隧道故障（MPLS Tunnel Failure），TE tunnel变为down（The TE tunnel Changes to Down）",
+      "故障诊断": "确定故障对象：根据告警确定故障的网元和隧道对象；获取故障隧道资源信息：查询故障隧道信息，包括隧道ingress、egress网元，tunnel接口，隧道目的IP地址；检查lsr id是否匹配：获取对端设备的LSR ID（通过管控接口查询），检查本端故障隧道配置的目的ip与对端的LSR ID是否一致，若不一致则故障原因为LSR ID 不匹配；",
+      "方案生成": "",
+      "对管控依赖": "1、隧道信息查询接口：通过tunnel名称查询隧道源宿网元、隧道接口、隧道目的ip等配置；2、网元LSR ID查询接口：输入网元名查询网元的LSR ID；",
+      "备注": "已从场景基线中去除"
+    },
+    {
+      "slide": 34,
+      "故障类型": "SR-TE隧道故障",
+      "根因类型": "LSR ID不匹配",
+      "触发告警": "sr-te policy status has been changed",
+      "故障诊断": "（同RSVP-TE隧道故障：LSR ID不匹配）确定故障对象：根据告警确定故障的网元和隧道对象；获取故障隧道资源信息：查询故障隧道信息，包括隧道ingress、egress网元，tunnel接口，隧道目的IP地址；检查lsr id是否匹配：获取对端设备的LSR ID（通过管控接口查询），检查本端故障隧道配置的目的ip与对端的LSR ID是否一致，若不一致则故障原因为LSR ID 不匹配；",
+      "方案生成": "",
+      "对管控依赖": "1、隧道信息查询接口：通过tunnel名称查询隧道源宿网元、隧道接口、隧道目的ip等配置；2、网元LSR ID查询接口：输入网元名查询网元的LSR ID；#sysname PE1#ip vpn-instance vpna ipv4-family  route-distinguisher 100:1  tnl-policy p1  apply-label per-instance  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#mpls lsr-id 1.1.1.9#               mpls             mpls te        #               explicit-path pe2 next sid label 16200 type prefix index 1 next sid label 16300 type prefix index 2#               segment-routing#               interface LoopBack1 ip address 1.1.1.9 255.255.255.255 isis enable 1 isis prefix-sid absolute 16100 ##interface Tunnel1 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te destination 3.3.3.8 mpls te signal-protocol segment-routing mpls te tunnel-id 1 mpls te path explicit-path pe2#tunnel-policy p1 tunnel select-seq sr-te load-balance-number 1 unmix#PE2的配置文件#sysname PE2#ip vpn-instance vpna ipv4-family  route-distinguisher 200:1  tnl-policy p1  apply-label per-instance  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#mpls lsr-id 3.3.3.9#               mpls             mpls te        #explicit-path pe1 next sid label 16200 type prefix index 1 next sid label 16100 type prefix index 2#               segment-routing #               interface LoopBack1 ip address 3.3.3.9 255.255.255.255 isis enable 1 isis prefix-sid absolute 16300##interface Tunnel1 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te destination 1.1.1.9 mpls te signal-protocol segment-routing mpls te tunnel-id 1 mpls te path explicit-path pe1 #tunnel-policy p1 tunnel select-seq sr-te load-balance-number 1 unmix#已从场景基线中去除",
+      "备注": "已从场景基线中去除"
+    },
+    {
+      "slide": 35,
+      "故障类型": "SR-TE隧道故障",
+      "根因类型": "SID冲突",
+      "触发告警": "sr-te policy status has been changed",
+      "故障诊断": "确定故障对象：根据告警确定故障的网元和隧道对象；获取故障隧道资源信息：查询故障隧道信息，包括隧道ingress、egress网元，tunnel接口，隧道目的IP地址，两端网元的SID；检查sid是否匹配：检查隧道两端网元的sid是否相同，若相同则故障根因为“sid冲突”",
+      "方案生成": "",
+      "对管控依赖": "1、隧道信息查询接口：通过tunnel名称查询隧道源宿网元、隧道接口、隧道目的ip、两端网元各自的LSR ID、SID；#sysname PE1#ip vpn-instance vpna ipv4-family  route-distinguisher 100:1  tnl-policy p1  apply-label per-instance  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#mpls lsr-id 1.1.1.9#               mpls             mpls te        #               explicit-path pe2 next sid label 16200 type prefix index 1 next sid label 16300 type prefix index 2#               segment-routing#               interface LoopBack1 ip address 1.1.1.9 255.255.255.255 isis enable 1 isis prefix-sid absolute 16100 ##interface Tunnel1 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te destination 3.3.3.9 mpls te signal-protocol segment-routing mpls te tunnel-id 1 mpls te path explicit-path pe2#tunnel-policy p1 tunnel select-seq sr-te load-balance-number 1 unmix#PE2的配置文件#sysname PE2#ip vpn-instance vpna ipv4-family  route-distinguisher 200:1  tnl-policy p1  apply-label per-instance  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#mpls lsr-id 3.3.3.9#               mpls             mpls te        #explicit-path pe1 next sid label 16200 type prefix index 1 next sid label 16100 type prefix index 2#               segment-routing #               interface LoopBack1 ip address 3.3.3.9 255.255.255.255 isis enable 1 isis prefix-sid absolute 16300##interface Tunnel1 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te destination 1.1.1.9 mpls te signal-protocol segment-routing mpls te tunnel-id 1 mpls te path explicit-path pe1 #tunnel-policy p1 tunnel select-seq sr-te load-balance-number 1 unmix#已从场景基线中去除",
+      "备注": "已从场景基线中去除"
+    },
+    {
+      "slide": 36,
+      "故障类型": "SR-Policy隧道故障",
+      "根因类型": "SID冲突",
+      "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
+      "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy配置信息：获取policy源宿两端网元的sid配置（调用管控接口）；检查参数错误：检查源宿两端的sid配置是否冲突，若冲突则根因为sid冲突；",
+      "方案生成": "",
+      "对管控依赖": "1、接口1：srpolicy配置信息查询接口，包括源宿两端网元的sid；配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172368903PE1的配置文件#sysname PE1#ip vpn-instance vpna ipv4-family  route-distinguisher 100:1  tnl-policy p1  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#bfd#mpls lsr-id 1.1.1.9#               mpls            #               segment-routing  sr-te-policy backup hot-standby enable sr-te-policy seamless-bfd enable#               interface LoopBack1 ip address 1.1.1.9 255.255.255.255 isis enable 1   isis prefix-sid index 10##route-policy color100 permit node 1 apply extcommunity color 0:100#               tunnel-policy p1 tunnel select-seq sr-te-policy load-balance-number 1 unmix#returnPE2的配置文件#sysname PE2#ip vpn-instance vpna ipv4-family  route-distinguisher 200:1  tnl-policy p1  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#bfd#sbfd reflector discriminator 3.3.3.9#mpls lsr-id 3.3.3.9#               mpls            #               segment-routing  sr-te-policy backup hot-standby enable sr-te-policy seamless-bfd enable#               interface LoopBack1 ip address 3.3.3.9 255.255.255.255 isis enable 1   isis prefix-sid index 30##route-policy color200 permit node 1 apply extcommunity color 0:200#               tunnel-policy p1 tunnel select-seq sr-te-policy load-balance-number 1 unmix#return例2：使用ospf的场景，sid配置类似：[*HUAWEI] interface loopback0[*HUAWEI-loopback0] ospf enable 1 area 1[*HUAWEI-loopback0] ospf prefix-sid index 100需要再确认，SID冲突是否会影响PolicyNCE下发的是严格标签1、sbfd for srv6 policy, sbfd down的情况，原因：链路丢包；2、路由撤销，一般会配置头节点感知功能，如果路由撤销了，policy也会down链路利用率（切片x）ISIS/OSPF/BGP支持的场景是公网还是私网？已从场景基线中去除",
+      "备注": "已从场景基线中去除"
+    },
+    {
+      "slide": 37,
+      "故障类型": "SRv6-Policy隧道故障",
+      "根因类型": "SID冲突",
+      "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
+      "故障诊断": "——逻辑跟SR-Policy类似确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srv6policy配置信息：获取srv6policy源宿两端网元的sid配置（调用管控接口）；检查参数错误：检查源宿两端的sid配置是否冲突，若冲突则根因为sid冲突；",
+      "方案生成": "",
+      "对管控依赖": "1、接口1：srv6policy配置信息查询接口，包括源宿两端网元的sid；PE1的配置文件#sysname PE1#ip vpn-instance vpna ipv4-family  route-distinguisher 100:1  apply-label per-instance  tnl-policy p1  vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#               segment-routing ipv6 encapsulation source-address 2001:DB8:11::1                       locator as1 ipv6-prefix 2001:DB8:10:: 64 static 32               opcode ::100 end-x interface GigabitEthernet0/1/0 nexthop 2001:DB8:1::2 no-flavor         srv6-te-policy locator as1                              segment-list list1                                       index 5 sid ipv6 2001:DB8:10::100                                index 10 sid ipv6 2001:DB8:20::100                               index 15 sid ipv6 2001:DB8:30::100                              srv6-te policy policy1 endpoint 2001:DB8:14::4 color 101           binding-sid 2001:DB8:10::1000                                    candidate-path preference 100                            segment-list list1 # PE2的配置文件#sysname PE2#ip vpn-instance vpna ipv4-family  route-distinguisher 200:1  apply-label per-instance  tnl-policy p1   vpn-target 111:1 export-extcommunity  vpn-target 111:1 import-extcommunity#               segment-routing ipv6                                     encapsulation source-address 2001:DB8:14::4                       locator as1 ipv6-prefix 2001:DB8:40:: 64 static 32               opcode ::200 end-x interface GigabitEthernet0/1/0 nexthop 2001:DB8:2::1 no-flavor                  srv6-te-policy locator as1                              segment-list list1                                       index 5 sid ipv6 2001:DB8:40::200                                index 10 sid ipv6 2001:DB8:30::200                               index 15 sid ipv6 2001:DB8:20::200                              srv6-te policy policy1 endpoint 2001:DB8:11::1 color 101           binding-sid 2001:DB8:40::1000                                    candidate-path preference 100                            segment-list list1 # 已从场景基线中去除",
+      "备注": "已从场景基线中去除"
+    }
+  ]
+}
