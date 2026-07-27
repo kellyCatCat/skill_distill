@@ -55,7 +55,7 @@
       "故障子类": "MPLS隧道故障",
       "故障定义": "RSVP-TE隧道故障",
       "故障根因": "人工关闭RSVP-TE隧道",
-      "诊断": "【自动定位】给出故障隧道、错误配置（隧道目的地址与对端的LSR ID不匹配）",
+      "诊断": "【自动定位】给出故障隧道、错误配置（隧道接口配置中存在shutdown，隧道被人工关闭）",
       "修复": "【自动生成】请确认是否启用该隧道，给出隧道启用配置。"
     },
     {
@@ -69,21 +69,21 @@
       "故障子类": "Segment Routing隧道故障",
       "故障定义": "SR-TE隧道故障",
       "故障根因": "人工关闭SR-TE隧道",
-      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突等）",
+      "诊断": "【自动定位】给出故障隧道、错误配置（隧道接口配置中存在shutdown，隧道被人工关闭）",
       "修复": "【自动生成】请确认是否启用该隧道，给出隧道启用配置。"
     },
     {
       "故障子类": "Segment Routing隧道故障",
       "故障定义": "SR-Policy隧道故障",
       "故障根因": "人工关闭SR Policy",
-      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突，要求SID在IGP域内唯一）",
+      "诊断": "【自动定位】给出故障隧道、错误配置（Policy管理状态为down，被人工关闭）",
       "修复": "【自动生成】请确认是否启用该SR-Policy，给出SR-Policy启用配置。"
     },
     {
       "故障子类": "Segment Routing隧道故障",
       "故障定义": "SRv6-Policy隧道故障",
       "故障根因": "人工关闭SRv6 Policy",
-      "诊断": "【自动定位】给出故障隧道、错误配置（SID冲突，要求SID在IGP域内唯一）",
+      "诊断": "【自动定位】给出故障隧道、错误配置（Policy管理状态为down，被人工关闭）",
       "修复": "【自动生成】请确认是否启用该SR-Policy，给出SR-Policy启用配置。"
     },
     {
@@ -239,7 +239,7 @@
     },
     {
       "slide": 19,
-      "故障类型": "Rv6-Policy隧道故障",
+      "故障类型": "SRv6-Policy隧道故障",
       "根因类型": "人工关闭SRv6-Policy",
       "触发告警": "SR Policy的状态变down(hwSrPolicyDown)",
       "故障诊断": "确定故障对象：根据告警参数确定故障的SrPolicy隧道；获取srpolicy管理状态信息：获取policy源宿两端网元的policy管理状态（调用管控接口）；故障判断：若policy管理状态为down，则根因为人工管理SR-Policy。--拿不到正确的管理状态",
@@ -260,7 +260,7 @@
     {
       "slide": 21,
       "故障类型": "PWE3故障",
-      "根因类型": "PW远端IP地址不匹配",
+      "根因类型": "MTU不一致",
       "触发告警": "PW VC状态Down告警(PW VC Down) （封装类型，mtu，接口down，隧道down）",
       "故障诊断": "已支持",
       "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的接口，然后去接口下修改MTU的值。接口：fixPwe3Mtu(pwe3业务标识, 要修改的网元，mtu值）对管控的依赖：1、PWE3业务信息查询接口（已有，通过存量查询）2、PW mtu参数修复接口：fixPwMtu(xx)—— 可以诊断，无法修复 --》 如果要修复，依赖全局的lsr-id的历史信息建议改成MTU不一致，请刘瑞按MTU不一致新增一页配置参考：https://support.huawei.com/hedex/hdx.do?docid=DOC1101164703&id=ZH-CN_TASK_0172369923PE1的配置文件#sysname PE1#mpls lsr-id 1.1.1.9#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 3.3.3.9 remote-ip 3.3.3.9##interface GigabitEthernet0/2/0 ---UNI口 undo shutdown mpls l2vc 3.3.3.9 10 tunnel-policy policy1 mtu 1500#interface LoopBack1 ip address 1.1.1.9 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 3.3.3.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#PE2的配置文件#sysname PE2#mpls lsr-id 3.3.3.8#mpls mpls te mpls rsvp-te mpls te cspf#mpls l2vpn#mpls ldp#mpls ldp remote-peer 1.1.1.9 remote-ip 1.1.1.9#interface GigabitEthernet0/2/0 undo shutdown mpls l2vc 1.1.1.9 10 tunnel-policy policy1 mtu 2000#interface LoopBack1 ip address 3.3.3.8 255.255.255.255#interface Tunnel10 ip address unnumbered interface LoopBack1 tunnel-protocol mpls te mpls te signal-protocol rsvp-te destination 1.1.1.9 mpls te bandwidth ct0 2000 mpls te tunnel-id 10#",
@@ -280,7 +280,7 @@
     {
       "slide": 23,
       "故障类型": "VPLS故障",
-      "根因类型": "PW远端IP地址不匹配",
+      "根因类型": "MTU不一致",
       "触发告警": "VPLS VC状态Down（VPLS VC Down）（vsi的封装类型，mtu，接口down，隧道down）",
       "故障诊断": "已支持",
       "方案生成": "1、根据查询对端的MTU，客户确认是将本段的MTU修改成对端的MTU，还是将对端的MTU修改为本段的MTU；2、根据客户的选择，将选择的网元以及要修改的MTU的值和业务id，传给API，API根据业务去找对应网元下的Vsi，然后去vsi下修改MTU的值。接口：fixVplsMtu(VPLS业务标识, 网元, mtu）对管控的依赖： VPLS业务配置修复接口，VPLS业务信息查询接口—— 可以诊断，无法定位可以换 MTU不一致 故障场景，请刘瑞按MTU不一致新增一页问题：是否存在1对多mtu不一致的情况？",
