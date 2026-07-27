@@ -126,6 +126,8 @@ def normalize_case(entry: dict) -> dict:
         return None
     return {
         "slide": entry.get("slide"),
+        # 补充信息带来的案例不一定对应PPT页码，用“来源”字段说明出处
+        "origin": entry.get("来源", "").strip(),
         "fault_type": entry.get("故障类型", "").strip(),
         "root_cause": entry.get("根因类型", "").strip(),
         "alarm": entry.get("触发告警", "").strip(),
@@ -134,6 +136,13 @@ def normalize_case(entry: dict) -> dict:
         "dependency": entry.get("对管控依赖", "").strip(),
         "note": entry.get("备注", "").strip(),
     }
+
+
+def case_origin(case: dict) -> str:
+    """案例出处：优先用"来源"字段，其次用PPT页码。"""
+    if case.get("origin"):
+        return case["origin"]
+    return f"第{case['slide']}页"
 
 
 def is_retired(case: dict) -> str:
@@ -281,7 +290,7 @@ def format_case_detail(fault_type: str, cases: list, overview_table: list) -> st
         )
     for case in cases:
         blocks.append(
-            f"## 案例：{case['fault_type']} —— {case['root_cause']}（来源第{case['slide']}页）\n"
+            f"## 案例：{case['fault_type']} —— {case['root_cause']}（来源{case_origin(case)}）\n"
             f"- 触发告警：{case['alarm']}\n"
             f"- 故障诊断：{case['diagnosis']}\n"
             f"- 方案生成：{case['solution'] or '（案例未给出修复方案，skill中只写定位到根因为止）'}\n"
@@ -502,7 +511,7 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     if orphan_cases:
         print(f"\n[WARN] 有 {len(orphan_cases)} 条详情页未列入概览表（概览表可能漏行）:")
         for case in orphan_cases:
-            print(f"  - 第{case['slide']}页 {case['fault_type']} / {case['root_cause']}")
+            print(f"  - {case_origin(case)} {case['fault_type']} / {case['root_cause']}")
 
     skill_index = build_skill_index(SKILL_DIR)
     print(f"\n既有skill {len(skill_index)} 个")

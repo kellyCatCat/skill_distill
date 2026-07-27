@@ -147,6 +147,17 @@
       "备注": "全网唯一，可能存在少量设备未纳管、或同步不及时，导致按存量判断唯一性不准确2、要考虑掩码不相同的场景，优选按掩码长的一端分、且掩码不能是32位；ipv6同理（推荐126位掩码）；; 需要考虑两端都报了告警的场景，避免出现左边右边分别触发改了两次；另外，如何避免把符合用户规划意图的一端修改掉？生成配置样例：interface GigabitEthernet0/2/0  undo ip address xxx  ip address 172.17.1.1 255.255.255.0commit对管控依赖：1、端口IP地址查询接口（存量已ready）2、修改ip地址接口（把undo 和 新地址包装在一个报文下发）; 场景说明: 场景1：IPv4单栈场景（改了设备F，在D报告警），一端接口没有地址的场景优先级放低暂不支持场景2：IPv6单栈场景（v6 ospfv3实验室未构建出来，待验证/确认）场景3：IPv4 v6双栈场景"
     },
     {
+      "slide": null,
+      "来源": "补充信息，PPT中无对应页",
+      "故障类型": "OSPF邻居状态异常",
+      "根因类型": "OSPF两端router-id冲突",
+      "触发告警": "OSPF邻居状态改变(OSPF Neighbor State Changes)场景说明：场景1：IPv4单栈场景；场景2：IPv6单栈场景；场景3：IPv4 v6双栈场景",
+      "故障诊断": "需要补充：ospf router id的不同配置方式，进程之间的id冲突，考虑多进程的情况",
+      "方案生成": "",
+      "对管控依赖": "1、ospf router-id生成接口，参考CLI指南的分配规则：1) 如果存在配置了IP地址的Loopback接口，则选择Loopback接口地址中最大的作为Router ID；2) 如果没有配置了IP地址的Loopback接口，则从其他接口的IP地址中选择最大的作为Router ID（不考虑接口的UP/DOWN状态）。—— IPRAN基线场景都会有loopback接口，简化实现，只采用第一条规则，不应用第二条规则；2、CLI配置下发接口（公共接口）",
+      "备注": "约束：仅支持直连的ospf/ospfv3邻居down（符合IPRAN解决方案基线），且为邻居两端的router id冲突"
+    },
+    {
       "slide": 9,
       "故障类型": "BGP邻居状态异常",
       "根因类型": "BGP Peer IP不匹配、as-number不匹配、router-id冲突，三个根因中的一种",
@@ -323,8 +334,14 @@
     },
     {
       "slide": 30,
-      "type": "supplementary",
-      "raw_title": "18、L2VPN业务故障：二层环路"
+      "来源": "第30页，PPT仅有标题，内容由补充信息提供",
+      "故障类型": "L2EVPN故障",
+      "根因类型": "二层环路（客户侧网络一个VLAN或BD导致环路）",
+      "触发告警": "EVPN MAC跳变告警(hwEvpnMacDupVpnAlarm)场景说明：场景1：L2EVPN一侧发生环路，定界环路下挂接口，推荐shutdown子接口；触发原因：客户侧网络一个VLAN或者BD导致环路",
+      "故障诊断": "1、确定故障对象：根据告警确定学习MAC的设备和接口。（1）hwEvpnMacDupVpnAlarm告警中带有EVPNInstanceName；（2）执行display evpn vpn-instance name <evpn实例名> mac-duplication，查询跳变的MAC地址和本端子接口，回显形如：Black Hole : Disabled / Mac-address 0001-0001-0001 / BdTag 0 / BdId 100 / Mtimes 5 / SuppressTime 2022-01-24 16:05:24 / LastSource GigabitEthernet2/0/10.100；（3）用该MAC地址（Eth__mac）过滤统一存量，若能找到对应接口，则不推荐使用shutdown接口的修复方案。—— 推荐两个设备接口加入同一个水平分割组。当前版本不包含该内容，建议人工远程修复，该场景不常见。2、确定环路位置：（1）若hwEvpnMacDupVpnAlarm涉及的接入接口已开启LDT并产生hwLoopDetectWithoutBlock告警，说明当前设备下挂的网络已存在环路，则认为下挂网络存在环路；（2）若已产生hwLoopDetectWithoutBlock告警，或3分钟内未产生该告警，则删除子接口下的LDT配置和全局LDT配置。",
+      "方案生成": "1、若已开启LDT且该设备产生了hwLoopDetectWithoutBlock告警，则推荐将该子接口shutdown；2、若已开启LDT但该设备未产生hwLoopDetectWithoutBlock告警，则建议排查其它产生hwEvpnMacDupVpnAlarm告警的节点的环网配置。",
+      "对管控依赖": "",
+      "备注": "统一存量能按MAC地址找到对应接口时不推荐shutdown接口，推荐两个设备接口加入同一个水平分割组；当前版本不包含该内容，建议人工远程修复，该场景不常见。"
     },
     {
       "slide": 31,
