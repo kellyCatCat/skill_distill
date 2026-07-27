@@ -37,7 +37,10 @@ TARGET_OVERRIDES = {
 
 # 与主蒸馏流水线保持一致的写作约束，追加/新建的内容必须同样遵守
 WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系技术支持、提交给工程师这类动作，整个步骤删除，并删除其它步骤对它的引用。
-- 输出全文禁止出现"联系技术支持"、"寻求技术支持"、"提交给工程师"、"收集信息并联系"等表述，排障步骤穷尽后直接结束。
+- 输出全文禁止出现"联系技术支持"、"寻求技术支持"、"提交给工程师"、"收集信息并联系"、"联系业务侧/安全侧/运维人员处理"等表述，排障步骤穷尽后直接结束。
+- 案例明确写了"NA，人工远程修复"或"可以诊断，无法修复/无法定位"的根因，skill里只写到根因判定为止，不要编出修复步骤，也不要写"需在对端设备上添加正确配置"这类没有具体执行手段的说法。
+- 抓包分析（wireshark等）、仿真验证、重启协议进程这类agent执行不了或有风险的动作，不要写成步骤。
+- 管控接口只写案例里给出的信息（路径、案例中提到的入参）。案例没给HTTP方法就不要猜，更不要写"根据具体网管API定义"这类模糊说法；入参字段名案例只给了中文描述时，就用中文描述，不要自己编英文字段名。
 - 案例中形如"—— 待确认xxx"、"请刘瑞xxx"、"求助设备专家"、人名工号等内部讨论备注，一律不要写进skill。
 - 引用其它分类的skill时，用方括号包裹skill目录清单中的相对路径，如：参考[故障处理：IP路由/BGP故障案例.md]继续排查；清单中没有的文档只保留纯文字说明，不要输出链接。
 - 命令回显不要大段照搬，讲清要关注回显里的哪些字段即可；设备配置样例保留必要的几行即可。
@@ -88,7 +91,7 @@ MERGE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在把新增的故
 
 # 内容要求
 <writing_rules>
-- append时：输出一个或多个以"## "开头的小节，小节标题包含根因名称；不要输出frontmatter（--- name/description ---）；不要输出"# "一级标题；即使目标skill里已有"## "小节，新小节也必须用"## "而不是"### "；步骤编号在小节内部从1开始。追加内容的格式必须形如：
+- append时：输出一个或多个以"## "开头的小节，小节标题包含根因名称；追加内容会被拼到目标skill文件的**末尾**，所以小节标题不能和目标skill里已有的"## "小节同名（同名会让文件里出现两个同名小节），也不要接着已有小节的编号往下写（如已有小节写到步骤4就从步骤5开始）——每个新小节都是独立的一节，步骤从1开始；不要输出frontmatter（--- name/description ---）；不要输出"# "一级标题；即使目标skill里已有"## "小节，新小节也必须用"## "而不是"### "；步骤编号在小节内部从1开始。追加内容的格式必须形如：
 
   ## 场景：ISIS System ID冲突
   （一句话说明该场景的现象与触发告警）
@@ -97,7 +100,7 @@ MERGE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在把新增的故
 
   ## 场景：另一个根因
   ……
-- create时：输出完整skill，以frontmatter开头（name为英文小写+连字符，description为一句话简介），正文以一级标题"# "开始。
+- create时：输出完整skill，以frontmatter开头（name为英文小写+连字符，description为一句话简介），正文以一级标题"# "开始。一级标题写排障主题名（如"# PWE3故障排障指南"），不要把目标skill的文件路径当标题（不要写成"# 故障处理：VPN/PWE3故障案例"）。
 
 # 输出格式
 先输出一个json代码块给出判定，再按需输出一个markdown代码块给出内容（action为covered时不输出markdown代码块）：
@@ -148,8 +151,16 @@ def normalize_append_content(content: str) -> str:
     return content.strip()
 
 
-def prepare_merge_content(reply: str) -> tuple:
-    """从合并阶段的回复里取出 (判定, 规整后的内容, 错误说明)。"""
+def section_headings(markdown: str) -> list:
+    """取出markdown里所有二级小节标题。"""
+    return [h.strip() for h in re.findall(r"^## +(.+)$", markdown or "", re.MULTILINE)]
+
+
+def prepare_merge_content(reply: str, existing_headings: list = None) -> tuple:
+    """从合并阶段的回复里取出 (判定, 规整后的内容, 错误说明)。
+
+    existing_headings 为目标skill已有的二级小节标题，用于挡住"续写既有小节"。
+    """
     decision = extract_json_block(reply)
     action = decision.get("action")
     if action == "covered":
@@ -157,10 +168,10 @@ def prepare_merge_content(reply: str) -> tuple:
     content = extract_markdown_content(reply)
     if action == "append":
         content = normalize_append_content(content)
-    return decision, content, check_generated_content(action, content)
+    return decision, content, check_generated_content(action, content, existing_headings)
 
 
-def check_generated_content(action: str, content: str) -> str:
+def check_generated_content(action: str, content: str, existing_headings: list = None) -> str:
     """检查生成内容是否可直接落盘，返回错误说明（空串表示通过）。"""
     content = (content or "").strip()
     if action == "covered":
@@ -170,8 +181,18 @@ def check_generated_content(action: str, content: str) -> str:
     if action == "append":
         if content.startswith("---"):
             return "追加内容里带了frontmatter，应只输出小节"
-        if not re.search(r"^## +\S", content, re.MULTILINE):
+        new_headings = section_headings(content)
+        if not new_headings:
             return "追加内容里没有以'## '开头的小节"
+        # 追加内容是拼到文件末尾的，与既有小节同名会让文件里出现两个同名小节；
+        # 首个步骤编号不是1，说明模型在续写既有小节而不是新起一节。
+        dup = [h for h in new_headings if h in set(existing_headings or ())]
+        if dup:
+            return f"追加的小节与目标skill已有小节同名: {'、'.join(dup)}"
+        for block in re.split(r"^## +.+$", content, flags=re.MULTILINE)[1:]:
+            first = re.search(r"^\s*(\d+)[.、)]", block, re.MULTILINE)
+            if first and first.group(1) != "1":
+                return f"追加小节的步骤编号从{first.group(1)}开始，应为续写既有小节，须改为独立小节且从1开始"
         return ""
     if action == "create":
         if not re.match(r"^---\s*\n", content):
@@ -180,12 +201,14 @@ def check_generated_content(action: str, content: str) -> str:
     return f"未知的action: {action!r}"
 
 
-def _merge_extractor(text: str) -> str:
+def make_merge_extractor(existing_headings: list):
     """内容不合规时抛异常，让call_model_with_retry重试，并把原因带进最终报错。"""
-    _, content, error = prepare_merge_content(text)
-    if error:
-        raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
-    return text
+    def _extractor(text: str) -> str:
+        _, content, error = prepare_merge_content(text, existing_headings)
+        if error:
+            raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
+        return text
+    return _extractor
 
 
 def normalize_case(entry: dict) -> dict:
@@ -442,13 +465,15 @@ def merge_bucket(args: tuple) -> dict:
               .replace("<skill_catalog>", skill_catalog)
               .replace("<writing_rules>", WRITING_RULES))
     print(f"[PID {os.getpid()}] 合并到: {target}（案例组: {'、'.join(fault_types)}）")
-    reply = call_model_with_retry(api_url, model_name, prompt, extractor=_merge_extractor)
+    existing_headings = section_headings(target_content)
+    reply = call_model_with_retry(api_url, model_name, prompt,
+                                  extractor=make_merge_extractor(existing_headings))
     result = {"target": target, "fault_types": fault_types, "is_new": not target_content}
     if reply.startswith("错误："):
         result["error"] = reply
         return result
     try:
-        decision, content, _ = prepare_merge_content(reply)
+        decision, content, _ = prepare_merge_content(reply, existing_headings)
     except (ValueError, json.JSONDecodeError) as e:
         result["error"] = f"错误：合并结果解析失败: {e}"
         return result
