@@ -403,7 +403,9 @@ def locate_group(args: tuple) -> dict:
               .replace("<skill_index>", skill_index_text)
               .replace("<case_brief>", format_case_brief(fault_type, cases)))
     print(f"[PID {os.getpid()}] 定位案例组: {fault_type}（{len(cases)} 条）")
-    reply = call_model_with_retry(api_url, model_name, prompt, extractor=_locate_extractor)
+    # 定位是分类判断，用temperature=0保证同一批案例重跑结果稳定
+    reply = call_model_with_retry(api_url, model_name, prompt,
+                                  extractor=_locate_extractor, temperature=0.0)
     if reply.startswith("错误："):
         return {"fault_type": fault_type, "error": reply}
     try:

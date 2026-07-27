@@ -100,13 +100,17 @@ def extract_markdown_content(text: str) -> str:
 
 
 def call_model_with_retry(api_url: str, model_name: str, question: str, max_retries: int = 3,
-                          retry_delay: float = 1.0, extractor=extract_markdown_content) -> str:
-    """extractor 从模型回复中提取有效内容，返回空串表示本次回复无效需重试。"""
+                          retry_delay: float = 1.0, extractor=extract_markdown_content,
+                          temperature: float = 0.4) -> str:
+    """extractor 从模型回复中提取有效内容，返回空串表示本次回复无效需重试。
+
+    temperature 默认0.4适合写作类调用；分类判断类调用（如把案例归到哪个skill）
+    传0，避免同一批案例每次跑出不同的归类结果。"""
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": question}],
         "stream": False,
-        "temperature": 0.4,
+        "temperature": temperature,
         "max_tokens": 16384,
         "chat_template_kwargs": {"enable_thinking": False, "thinking": False}
     }
