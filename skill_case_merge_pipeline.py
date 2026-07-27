@@ -27,6 +27,14 @@ from skill_self_distill_pipeline import call_model_with_retry, extract_markdown_
 # 案例条目标注了这些字样时不再并入skill（场景已下线/已确认不成立）
 RETIRED_MARKERS = ("已废弃", "已从场景基线中去除")
 
+# 人工指定某个案例组并入哪个skill，跳过定位阶段的模型调用。
+# 定位阶段判"新建"时是让模型自己编路径，同一批案例重跑可能编出不同的目录和文件名；
+# 路径一旦定下来就写到这里，避免重跑在两个位置各建一篇内容重复的skill。
+# 键为案例组的"故障类型"，值为"一级目录/二级名称.md"。
+TARGET_OVERRIDES = {
+    # "链路性能越限": "故障处理：网络切片/切片链路带宽越限故障案例.md",
+}
+
 # 与主蒸馏流水线保持一致的写作约束，追加/新建的内容必须同样遵守
 WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系技术支持、提交给工程师这类动作，整个步骤删除，并删除其它步骤对它的引用。
 - 输出全文禁止出现"联系技术支持"、"寻求技术支持"、"提交给工程师"、"收集信息并联系"等表述，排障步骤穷尽后直接结束。
@@ -573,10 +581,20 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     skill_index_text = format_skill_index(skill_index)
     content_by_path = {item["rel_path"]: item["content"] for item in skill_index}
 
+    # 人工指定过目标的案例组不再调模型定位
+    pinned = [{"fault_type": ft, "target": sanitize_target(TARGET_OVERRIDES[ft]),
+               "is_new": sanitize_target(TARGET_OVERRIDES[ft]) not in content_by_path,
+               "reason": "人工指定（TARGET_OVERRIDES）"}
+              for ft in groups if ft in TARGET_OVERRIDES]
+    for loc in pinned:
+        print(f"  {loc['fault_type']} → {loc['target']}（人工指定）")
+
     locate_args = [(fault_type, group_cases, skill_index_text, API_URL, MODEL_NAME)
-                   for fault_type, group_cases in groups.items()]
+                   for fault_type, group_cases in groups.items()
+                   if fault_type not in TARGET_OVERRIDES]
     with Pool(processes=WORKERS) as pool:
         locations = pool.map(locate_group, locate_args)
+    locations += pinned
 
     locate_errors = [loc for loc in locations if loc.get("error")]
     for loc in locate_errors:
