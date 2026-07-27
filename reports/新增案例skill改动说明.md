@@ -24,7 +24,7 @@
 
 ## 二、需要并入的案例：20 条，14 个案例组
 
-下表的"实际落点"来自 2026-07-27 在真实 skill 库（`skills_distilled/07-16`，59 篇）上跑的 DRY-RUN，全流程 0 失败（9 追加 + 3 新建 + 1 已覆盖），是实测结果而非推测。`修复方案`列标注该组案例是否给出了可执行的修复动作；仅能定位到根因的，skill 里只写到根因判定为止。
+下表的"实际落点"来自 2026-07-27 在真实 skill 库（`skills_distilled/07-16`，59 篇）上跑的 DRY-RUN，全流程 0 失败（**10 追加 + 3 新建**），是实测结果而非推测。`修复方案`列标注该组案例是否给出了可执行的修复动作；仅能定位到根因的，skill 里只写到根因判定为止。
 
 | # | 案例组（故障类型） | 根因（来源页） | 修复方案 | 实际落点 |
 | --- | --- | --- | --- | --- |
@@ -36,19 +36,19 @@
 | 6 | RSVP-TE 隧道故障 | 人工关闭隧道（p15） | 有（undo shutdown / 管控 API） | 追加 → `故障处理：MPLS/MPLS TE故障案例.md` |
 | 7 | SR-TE 隧道故障 | 人工关闭隧道（p16） | 有（同上） | 追加 → `故障处理：Segment Routing/SR-MPLS TE故障案例.md` |
 | 8 | SR-Policy 隧道故障 | 人工关闭 SR-Policy（p17） | 有（管控 API 置 admin-status up） | 追加 → 同上（与 SR-TE 合并为一次调用） |
-| 9 | SRv6-Policy 隧道故障 | 人工关闭 SRv6-Policy（p19） | 有（同上） | **已覆盖，无需改动** → `故障处理：Segment Routing/SRv6 TE Policy故障案例.md` |
+| 9 | SRv6-Policy 隧道故障 | 人工关闭 SRv6-Policy（p19） | 有（同上） | 追加 → `故障处理：Segment Routing/SRv6 TE Policy故障案例.md` |
 | 10 | PWE3 故障 | PW 远端 IP 不匹配（p20）；MTU 不一致（p21） | 有（远端地址取对端 LSR ID；MTU 对齐） | **新建** → `故障处理：VPN/PWE3故障案例.md` |
 | 11 | VPLS 故障 | PW 远端 IP 不匹配（p22）；MTU 不一致（p23） | 有（同上，作用在 VSI peer） | 追加 → `故障处理：VPN/VPLS故障案例.md` |
 | 12 | L2EVPN 故障 | 两端 Service ID 不匹配（p24）；二层环路（p30，补充信息） | 有（remote-service-id 取对端 local；环路按 LDT 告警决定是否 shutdown 子接口） | **新建** → `故障处理：VPN/L2EVPN故障案例.md` |
 | 13 | 1588v2 时钟异常 | P/E 模式不匹配（p26） | 有（对齐上游 2~3 跳，缺省推 E2E） | 追加 → `故障处理：时间与时钟同步/1588v2故障案例.md` |
 | 14 | 链路性能越限 | 切片链路带宽利用率过高（p31） | 有（切片链路带宽调整 API） | **新建** → `故障处理：QoS/切片链路带宽越限故障案例.md`（人工指定） |
 
-定位阶段 14 个案例组全部成功：11 个并入既有 skill、3 个新建（PWE3、L2EVPN、链路性能三类既有库确实没有），合并阶段 13 个目标里 12 个产出改动、1 个判定已覆盖。BFD、Segment Routing、时间与时钟同步这几类既有 skill 都存在，直接追加。
+定位阶段 14 个案例组全部成功：11 个并入既有 skill、3 个新建（PWE3、L2EVPN、链路性能三类既有库确实没有），合并阶段 13 个目标全部产出改动，无失败项。BFD、Segment Routing、时间与时钟同步这几类既有 skill 都存在，直接追加。
 
 两点需要复核：
 
-1. **新建 skill 的命名不稳定，已用人工指定解决。** 连跑两次，"链路性能越限"第一次落到 `故障处理：网络可靠性/切片链路性能越限故障案例.md`，第二次落到 `故障处理：IP业务/IP链路性能故障案例.md`——一级目录和文件名都变了。两处都不合适：这个案例的诊断和修复对象都是切片逻辑链路（FlexE / 信道化），既不是可靠性机制失效，也不是 IP 层连通性。已确定放到 `故障处理：QoS/切片链路带宽越限故障案例.md`（带宽、CIR、限速属 QoS 域，案例本身也提到 QoS 限速与物理带宽不一致的场景），并写入 `TARGET_OVERRIDES` 固定，重跑不再漂移。另外把定位阶段的 temperature 从 0.4 降到 0——这是分类判断，不需要随机性。并入既有 skill 的 11 个组两次结果完全一致，不受影响。
-2. **SRv6-Policy 的"已覆盖"判错了，已收紧规则。** 核对既有 `SRv6 TE Policy故障案例.md` 后确认：它的"场景B：Policy被Shutdown"覆盖了核心逻辑（`Check Admin Status` 为 Fail → `undo shutdown` → commit → 验证），但缺三样案例带来的东西——触发告警名 `hwSrPolicyDown`（全篇没有任何告警名，agent 拿到告警找不到入口）、管控接口 `PATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy`（skill 只有设备侧 CLI，而 agent 走的是接口）、以及"查源宿两端网元管理态"（skill 只查本端）。已在提示词里把这三项设为 covered 的硬性前置，少一项就必须判 append。写得越全的 skill 越容易被误判 covered，这是判定粒度的问题，不是个例。
+1. ~~**新建 skill 的命名不稳定**~~ **已解决。** 连跑两次，"链路性能越限"第一次落到 `故障处理：网络可靠性/切片链路性能越限故障案例.md`，第二次落到 `故障处理：IP业务/IP链路性能故障案例.md`——一级目录和文件名都变了。两处都不合适：这个案例的诊断和修复对象都是切片逻辑链路（FlexE / 信道化），既不是可靠性机制失效，也不是 IP 层连通性。已确定放到 `故障处理：QoS/切片链路带宽越限故障案例.md`（带宽、CIR、限速属 QoS 域，案例本身也提到 QoS 限速与物理带宽不一致的场景），并写入 `TARGET_OVERRIDES` 固定，重跑不再漂移。另外把定位阶段的 temperature 从 0.4 降到 0——这是分类判断，不需要随机性。并入既有 skill 的 11 个组两次结果完全一致，不受影响。
+2. ~~**SRv6-Policy 的"已覆盖"判错了**~~ **已收紧规则，重跑后已翻为追加。** 核对既有 `SRv6 TE Policy故障案例.md` 后确认：它的"场景B：Policy被Shutdown"覆盖了核心逻辑（`Check Admin Status` 为 Fail → `undo shutdown` → commit → 验证），但缺三样案例带来的东西——触发告警名 `hwSrPolicyDown`（全篇没有任何告警名，agent 拿到告警找不到入口）、管控接口 `PATCH /rest/iptunnelservice/v1/exi/sr-policy/action/modify-sr-policy`（skill 只有设备侧 CLI，而 agent 走的是接口）、以及"查源宿两端网元管理态"（skill 只查本端）。已在提示词里把这三项设为 covered 的硬性前置，少一项就必须判 append。写得越全的 skill 越容易被误判 covered，这是判定粒度的问题，不是个例。收紧后重跑，13 个目标全部判为 append/create、没有一个 covered——规则是否收得过紧，要靠核对追加内容有没有和既有小节讲重复来判断。
 
 ## 三、逐页盘点：37 页的去向
 
