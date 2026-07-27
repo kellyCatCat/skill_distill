@@ -176,15 +176,17 @@ def prepare_merge_content(reply: str, existing_headings: list = None,
                                                      target_path)
 
 
-# 只有本次流水线才知道"案例""目标skill"是什么，排障时的agent看不到，
-# 正文里出现这些词说明模型在向流水线交代而不是在写排障步骤。
-META_NARRATION_PATTERNS = [
-    r"按案例描述", r"根据案例描述", r"案例(中|里)(未|没有)", r"新案例", r"原skill", r"目标skill",
-    r"本?\s*[Ss]kill(主要|仅|只)(针对|支持|负责|写到)", r"此处假设", r"Agent(主要|仅|只)",
-    # 把追加内容写成"改哪几步"的编辑说明，而不是可直接拼接的小节
-    r"保留原有", r"更新步骤", r"新增步骤\s*\d", r"（原步骤", r"保持不变）",
-    # agent执行不了的动作，写成步骤等于把流程堵死在这里
-    r"[Ww]ireshark", r"抓包",
+# 落盘前必须挡住的两类措辞，各自给出对应的改法。
+BANNED_CONTENT_PATTERNS = [
+    # 只有本次流水线才知道"案例""目标skill"是什么，排障时的agent看不到；
+    # 正文里出现这些词说明模型在向流水线交代，而不是在写排障步骤。
+    (r"按案例描述|根据案例描述|案例(中|里)(未|没有)|新案例|原skill|目标skill"
+     r"|本?\s*[Ss]kill(主要|仅|只)(针对|支持|负责|写到)|此处假设|Agent(主要|仅|只)"
+     r"|保留原有|更新步骤|新增步骤\s*\d|（原步骤|保持不变）",
+     "skill的读者是排障agent，看不到案例、也不知道什么是目标skill，需改写为直接的排障说明"),
+    # agent执行不了的动作，写成步骤等于把排障流程堵死在这一步。
+    (r"[Ww]ireshark|抓包",
+     "网管agent执行不了抓包，不要写成排障步骤"),
 ]
 
 
@@ -196,11 +198,10 @@ def check_generated_content(action: str, content: str, existing_headings: list =
         return ""
     if not content:
         return f"action={action} 但没有生成内容"
-    for pattern in META_NARRATION_PATTERNS:
+    for pattern, advice in BANNED_CONTENT_PATTERNS:
         hit = re.search(pattern, content)
         if hit:
-            return (f"正文出现了面向本流水线的自述'{hit.group(0)}'，"
-                    f"skill的读者是排障agent，看不到案例，需改写为直接的排障说明")
+            return f"正文出现了'{hit.group(0)}'：{advice}"
     if target_path and re.search(r"\[[^\[\]\n]*" + re.escape(target_path.split("/")[-1]) + r"\]", content):
         return f"引用了目标skill自身[{target_path}]，同一篇内应写成'参考本文场景X'"
     if action == "append":
