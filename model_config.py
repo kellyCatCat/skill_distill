@@ -35,9 +35,13 @@ MODEL_PROFILES = {
         "thinking": False,
         "max_tokens": 16384,
     },
+    # 实测（python3 model_config.py --probe）这个部署的非thinking变体同样返回
+    # reasoning_content——关思考的 chat_template_kwargs 在它上面不起作用。既然
+    # 发了也没用、而推理照样吃输出预算，就按"会思考"登记：不发那个无效字段，
+    # 预算也留够。
     "MiniMax-M2.7": {
         "env_prefix": "MINIMAX",
-        "thinking": False,
+        "thinking": True,
         "max_tokens": 32768,
     },
     "MiniMax-M2.7-thinking": {
@@ -123,12 +127,32 @@ def _mask(secret: str) -> str:
     return f"{secret[:7]}…{secret[-4:]}（{len(secret)}字符）"
 
 
-def probe(cfg: dict, timeout: int = 120) -> str:
-    """发一个最小请求，确认这条链路能拿到可解析的JSON回复。
+def _probe_verdict(status: int, content: str, reasoning: str, budget: int,
+                   cfg: dict, shape: str) -> str:
+    """把探测结果判成 OK / WARN。
+
+    会思考的模型如果预算太小，会把预算全花在推理上、正文一个字都不出——这时链路
+    是通的，但报OK会让人误以为回复形态正常，所以单独判WARN并说清原因。
+    """
+    note = f"，另有 reasoning_content {len(reasoning)}字符" if reasoning else ""
+    if content:
+        return f"[OK] HTTP {status}，{shape}content={content[:40]!r}{note}"
+    if reasoning:
+        return (f"[WARN] HTTP {status}，{shape}链路通，但正文为空、只回了推理"
+                f"（reasoning_content {len(reasoning)}字符）——探测预算 "
+                f"max_tokens={budget} 被思考吃光了。正式调用用的是 "
+                f"{cfg['max_tokens']}，够不够要看实跑时有没有报 finish_reason=length")
+    return f"[WARN] HTTP {status}，{shape}正文与推理都为空"
+
+
+def probe(cfg: dict, timeout: int = 120, max_tokens: int = 1024) -> str:
+    """发一个小请求，确认这条链路能拿到可用的回复。
 
     优化流水线一次调用要几分钟，失败后很难分辨是模型输出的问题还是这一层就没通。
-    这里用 max_tokens=16 的最小请求快速验证：鉴权对不对、响应体是不是JSON、
-    回复结构里能不能取到 content。
+    这里快速验证：鉴权对不对、响应体是JSON还是SSE、回复里能不能取到 content。
+
+    预算给到1024而不是十几个token：会思考的模型光推理就能把小预算吃光，那样
+    正文永远是空的，探不出链路到底通没通。
     """
     import requests
 
@@ -137,7 +161,7 @@ def probe(cfg: dict, timeout: int = 120) -> str:
         "messages": [{"role": "user", "content": "回复OK两个字"}],
         "stream": False,
         "temperature": 0,
-        "max_tokens": 16,
+        "max_tokens": max_tokens,
     }
     if not cfg["thinking"]:
         payload["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
@@ -158,9 +182,9 @@ def probe(cfg: dict, timeout: int = 120) -> str:
             content, reasoning, _ = parse_sse_stream(response.text)
         except ValueError as e:
             return f"[FAIL] SSE流解析失败: {e}"
-        note = f"，另有 reasoning_content {len(reasoning)}字符" if reasoning else ""
-        return (f"[OK] HTTP {response.status_code}，SSE流（该端点无视stream=False，"
-                f"已按流式解析），content={content.strip()[:40]!r}{note}")
+        return _probe_verdict(response.status_code, content.strip(), reasoning,
+                              max_tokens, cfg,
+                              "SSE流（该端点无视stream=False，已按流式解析），")
 
     response.encoding = response.encoding or "utf-8"
     body = (response.text or "").strip()
@@ -176,10 +200,8 @@ def probe(cfg: dict, timeout: int = 120) -> str:
         message = res_json["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         return f"[FAIL] 回复结构里没有 choices[0].message: {json.dumps(res_json)[:200]}"
-    content = (message.get("content") or "").strip()
-    reasoning = message.get("reasoning_content")
-    note = f"，另有 reasoning_content {len(reasoning)}字符" if reasoning else ""
-    return f"[OK] HTTP {response.status_code}，content={content[:40]!r}{note}"
+    return _probe_verdict(response.status_code, (message.get("content") or "").strip(),
+                          message.get("reasoning_content") or "", max_tokens, cfg, "")
 
 
 def main(do_probe: bool = False):
@@ -196,7 +218,8 @@ def main(do_probe: bool = False):
         print(f"    地址      : {cfg['api_url']}")
         print(f"    密钥      : {_mask(cfg['api_key'])}")
         print(f"    max_tokens: {cfg['max_tokens']}")
-        print(f"    思考      : {'开（不发关思考的字段）' if cfg['thinking'] else '关'}")
+        print(f"    思考      : "
+              f"{'会思考（不发关思考的字段，预算已留给推理）' if cfg['thinking'] else '关'}")
         if do_probe:
             print(f"    探测      : {probe(cfg)}")
     print(f"\nNO_PROXY: {os.environ.get('NO_PROXY', '（空）')}")
