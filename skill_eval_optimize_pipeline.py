@@ -75,6 +75,15 @@ OPTIMIZE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在维护一套
 
 评测结论若反映的是agent自身没按skill执行（skill该写的都写了、判据也对），则判no-change并说明理由，不要为了改而改。
 
+# 评测里若给了"正确的诊断流程"
+评测材料除了失败记录，可能还附有这类故障的权威诊断流程（小节名如"正确的诊断流程"、"标准流程"，内容通常包含故障类型、触发告警、逐步的诊断判据、方案生成、配置样例、对管控的依赖）。给了就以它为准：
+
+- **按它校准既有正文**：skill 里与之冲突的判据要改掉；它有而 skill 没有的诊断步骤、判据、修复动作、管控接口、配置样例要补进来；步骤顺序按它的先后组织。
+- **跳转必须真的走得通**：流程往往是"第1步→第2步→第3步"的链条。改完后逐条检查 skill 里每处"转步骤X"、"参考场景Y"指向的小节，内容是不是真的是那一步该做的事——指错地方等于把排查链在这里截断，agent 走到死胡同就只能自己发挥，这正是评测失败的常见成因。
+- **告警名要写进来**，agent 是从告警进入排障的，流程里列出的告警名必须能在 skill 里检索到。
+- **场景约束照写**（如"只支持公网面"、"对端也在管理范围内"），但仍遵守上面的写作约束：流程标了"NA，人工远程修复"的根因，skill 里只写到根因判定为止，不要编修复步骤；流程里形如"求助设备专家对一下"、"需补充约束"、"待确认"这类内部讨论备注一律不写进skill。
+- 流程与失败记录冲突时以流程为准；失败记录用来定位 skill 现在错在哪一步。
+
 # 内容要求
 <writing_rules>
 - 输出整篇优化后的skill全文，以frontmatter开头（name为英文小写+连字符），正文以一级标题"# "开始。
@@ -94,18 +103,50 @@ OPTIMIZE_PROMPT_TEMPLATE = """你是IPRAN网络运维专家，正在维护一套
 """
 
 
+HEADING_LINE = re.compile(r"^#{1,6} +\S")
+
+
+def _leading_headings(text_before: str, limit: int = 3) -> tuple:
+    """紧邻 marker 之前的标题行，返回 (标题列表, 这些标题的起始位置)。
+
+    评测常写成"## 故障类型 / ### 根因 / 对应SKILL："这种层级，标题在marker之前，
+    直接按marker切会把它们丢掉（一个文件放多条记录时，就分不清哪条对哪个根因）。
+    """
+    lines = text_before.splitlines(keepends=True)
+    taken, cut, idx = [], len(text_before), len(lines)
+    while idx > 0:
+        line = lines[idx - 1]
+        if not line.strip():
+            idx, cut = idx - 1, cut - len(line)
+            continue
+        if HEADING_LINE.match(line) and len(taken) < limit:
+            taken.insert(0, line.strip())
+            idx, cut = idx - 1, cut - len(line)
+            continue
+        break
+    return taken, cut
+
+
 def parse_eval_text(text: str, source: str) -> list:
     """把一份评测结果切分成 [{raw_target, detail, source}]。
 
-    以"对应SKILL：<路径>"作为一条记录的起始，正文取到下一个标记或文件末尾。
+    以"对应SKILL：<路径>"作为一条记录的起始，正文取到下一条记录的标题或文件末尾；
+    marker 之前的标题行归到这条记录的开头当上下文。
     """
     records = []
     matches = list(EVAL_RECORD_HEADING.finditer(text))
     if not matches:
         return records
     for i, match in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        context, _ = _leading_headings(text[:match.start()])
+        if i + 1 < len(matches):
+            # 下一条记录的标题不算本条的正文
+            _, end = _leading_headings(text[:matches[i + 1].start()])
+        else:
+            end = len(text)
         detail = text[match.end():end].strip()
+        if context:
+            detail = "\n".join(context) + "\n\n" + detail
         records.append({
             "raw_target": match.group(1).strip(),
             "detail": detail,
