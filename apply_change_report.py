@@ -14,9 +14,14 @@ markdown应用到skill目录：追加块拼到文件末尾，新建块写成新�
 
 用法：
   python3 apply_change_report.py                       # 预演今天的报告，不写文件
+  python3 apply_change_report.py --diff                # 逐行看落盘前后的差异
   python3 apply_change_report.py --apply               # 实际写入
-  python3 apply_change_report.py <报告路径> <skill目录> [--apply]
+  python3 apply_change_report.py <报告路径> <skill目录> [--diff|--apply]
+
+整篇覆盖只报"9609→9956字符"看不出改了什么，审的时候用 --diff 逐行看：判据有没有
+真被改掉、原有场景有没有被顺手删掉。--diff 一定不写文件。
 """
+import difflib
 import os
 import re
 import sys
@@ -56,8 +61,23 @@ def parse_report(report_path: str) -> list:
     return changes
 
 
-def apply_one(change: dict, skill_dir: str, apply: bool) -> str:
-    """应用一处改动，返回结果说明。"""
+def render_diff(target: str, existing: str, new_text: str) -> str:
+    """落盘前后的unified diff。
+
+    整篇覆盖时只报"9609→9956字符"看不出改了什么，而这恰恰是审报告时最需要看的
+    ——判据有没有真的被改掉、原有场景有没有被顺手删掉，都得逐行看。
+    """
+    diff = difflib.unified_diff(
+        existing.splitlines(), new_text.splitlines(),
+        fromfile=f"a/{target}（现有）", tofile=f"b/{target}（落盘后）", lineterm="")
+    lines = list(diff)
+    if not lines:
+        return "    （无差异）"
+    return "\n".join(f"    {line}" for line in lines)
+
+
+def apply_one(change: dict, skill_dir: str, apply: bool, show_diff: bool = False) -> str:
+    """应用一处改动，返回结果说明。show_diff 时附带unified diff且一定不写文件。"""
     action, target, content = change["action"], change["target"], change["content"]
     path = os.path.join(skill_dir, *target.split("/"))
 
@@ -67,6 +87,9 @@ def apply_one(change: dict, skill_dir: str, apply: bool) -> str:
         error = check_generated_content("create", content)
         if error:
             return f"[FAIL] {target}: {error}"
+        if show_diff:
+            return (f"[将新建] {target}（{len(content)}字符）\n"
+                    + render_diff(target, "", content))
         if apply:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, 'w', encoding='utf-8') as f:
@@ -85,11 +108,13 @@ def apply_one(change: dict, skill_dir: str, apply: bool) -> str:
         error = check_optimized_content(content, existing, target)
         if error:
             return f"[FAIL] {target}: {error}"
+        summary = f"{target}（{len(existing.strip())}→{len(content)}字符）"
+        if show_diff:
+            return f"[将覆盖] {summary}\n" + render_diff(target, existing.strip(), content)
         if apply:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content + "\n")
-        return (f"[{'已覆盖' if apply else '将覆盖'}] {target}"
-                f"（{len(existing.strip())}→{len(content)}字符）")
+        return f"[{'已覆盖' if apply else '将覆盖'}] {summary}"
 
     # 幂等保护先于内容校验：小节已在文件中说明这份报告已经落过盘，属于正常重复
     # 执行，不该报失败（否则同名小节会被内容校验判成FAIL）。
@@ -101,16 +126,23 @@ def apply_one(change: dict, skill_dir: str, apply: bool) -> str:
     if error:
         return f"[FAIL] {target}: {error}"
 
+    merged = f"{existing.rstrip()}\n\n{content}"
+    if show_diff:
+        return (f"[将追加] {target}（{'、'.join(section_headings(content))}）\n"
+                + render_diff(target, existing.rstrip(), merged))
     if apply:
         with open(path, 'w', encoding='utf-8') as f:
-            f.write(f"{existing.rstrip()}\n\n{content}\n")
+            f.write(merged + "\n")
     return (f"[{'追加' if apply else '将追加'}] {target}"
             f"（{'、'.join(section_headings(content))}）")
 
 
-def main(report_path: str, skill_dir: str, apply: bool):
+def main(report_path: str, skill_dir: str, apply: bool, show_diff: bool = False):
+    if show_diff:
+        apply = False   # --diff 是审阅用的，永远不写文件
     print("=" * 60)
-    print("按变更说明落盘" + ("" if apply else "（预演，不写文件）"))
+    print("按变更说明落盘"
+          + ("（只看diff，不写文件）" if show_diff else "" if apply else "（预演，不写文件）"))
     print("=" * 60)
     print(f"变更说明: {report_path}")
     print(f"skill目录: {skill_dir}\n")
@@ -127,23 +159,26 @@ def main(report_path: str, skill_dir: str, apply: bool):
         print("错误: 变更说明里没有解析到任何改动内容")
         sys.exit(1)
 
-    results = [apply_one(c, skill_dir, apply) for c in changes]
+    results = [apply_one(c, skill_dir, apply, show_diff) for c in changes]
     for line in results:
         print(line)
 
     failed = [r for r in results if r.startswith("[FAIL]")]
     print(f"\n共 {len(changes)} 处改动，失败 {len(failed)} 处")
-    if not apply:
+    if show_diff:
+        print("这是diff预览；确认无误后加 --apply 实际写入。")
+    elif not apply:
         print("这是预演；确认无误后加 --apply 实际写入。")
     if failed:
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--apply"]
-    apply_flag = "--apply" in sys.argv[1:]
+    flags = {"--apply", "--diff"}
+    args = [a for a in sys.argv[1:] if a not in flags]
     main(
         args[0] if args else f"reports/skill_change_report_{datetime.now().strftime('%m-%d')}.md",
         args[1] if len(args) > 1 else "skills_distilled/07-16",
-        apply_flag,
+        "--apply" in sys.argv[1:],
+        "--diff" in sys.argv[1:],
     )

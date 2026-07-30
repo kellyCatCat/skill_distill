@@ -53,14 +53,14 @@ python3 model_config.py
 ```
 
 ```
-● MiniMax-M2.7-thinking
+● MiniMax-M2.7
     地址      : http://127.0.0.1:4002/v1/chat/completions
     密钥      : sk-cac-…4pS7（54字符）
     max_tokens: 32768
-    思考      : 开（不发关思考的字段）
+    思考      : 会思考（不发关思考的字段，预算已留给推理）
 ```
 
-密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给 thinking 模型会把思考压掉，所以 `thinking=True` 的模型完全不发这个字段。
+密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给会思考的模型，要么把思考压掉、要么根本不起作用，所以这类模型完全不发这个字段。注意"会思考"是按实测登记的——`MiniMax-M2.7` 虽然名字里没有 thinking，实测同样返回 `reasoning_content`，推理照样吃输出预算。
 
 ### 3. 探测链路是否真的通（建议先跑）
 
@@ -68,11 +68,12 @@ python3 model_config.py
 python3 model_config.py --probe
 ```
 
-用 `max_tokens=16` 的最小请求验证鉴权、响应体是否为 JSON、回复结构能否取到 `content`：
+用 `max_tokens=1024` 的小请求验证鉴权、响应体是否为 JSON/SSE、回复结构能否取到 `content`：
 
 ```
     探测      : [OK] HTTP 200，content='OK'
-    探测      : [OK] HTTP 200，SSE流（该端点无视stream=False，已按流式解析），content='OK'，另有 reasoning_content 3字符
+    探测      : [OK] HTTP 200，SSE流（该端点无视stream=False，已按流式解析），content='OK'，另有 reasoning_content 43字符
+    探测      : [WARN] HTTP 200，链路通，但正文为空、只回了推理——探测预算被思考吃光了
     探测      : [FAIL] HTTP 200 但响应体不是JSON（Content-Type=text/html，响应体为空）
 ```
 
@@ -162,11 +163,13 @@ python3 skill_eval_optimize_pipeline.py
 # 3. 人工审 reports/skill_optimize_report_<mm-dd>.md
 #    重点看「匹配方式」是否精确匹配、fixes 有没有点到真问题、改动内容有没有丢场景
 
-# 4. 预演 → 落盘
-python3 apply_change_report.py reports/skill_optimize_report_07-30.md skills_distilled/07-27
+# 4. 逐行看落盘前后的差异（整篇覆盖必看）
+python3 apply_change_report.py reports/skill_optimize_report_07-30.md skills_distilled/07-27 --diff
+
+# 5. 确认无误后写入
 python3 apply_change_report.py reports/skill_optimize_report_07-30.md skills_distilled/07-27 --apply
 
-# 5. 校验
+# 6. 校验
 python3 validate_skills.py skills_distilled/07-27
 ```
 
@@ -228,21 +231,24 @@ prompt 里内置了定位方法，这是这条流水线的核心：
 同一批评测跑多个模型并排比较，全程 DRY-RUN。
 
 ```bash
-python3 compare_models.py                                     # 比较默认两个模型
-python3 compare_models.py qwen3.6-27b MiniMax-M2.7-thinking    # 指定
+python3 compare_models.py                                                  # 比较默认两个模型
+python3 compare_models.py qwen3.6-27b MiniMax-M2.7 MiniMax-M2.7-thinking   # 指定
 ```
 
 ```
-模型                    skill                  判定        篇幅        保留   小节   fixes  秒
-qwen3.6-27b             ...BGP故障案例.md       失败        —           —      —      0      12.4
-MiniMax-M2.7-thinking   ...BGP故障案例.md       optimized   9609→9610   100%   5→5    2      86.1
+模型                    skill              判定        篇幅          保留   小节   fixes  秒
+qwen3.6-27b             ...BGP故障案例.md   optimized   9609→10168    106%   5→5    3      119.9
+MiniMax-M2.7            ...BGP故障案例.md   optimized   9609→9956     104%   5→5    4      192.3
+MiniMax-M2.7-thinking   ...BGP故障案例.md   optimized   9609→9883     103%   5→5    2      1411.4
 ```
 
 各模型的报告分别写到 `reports/skill_optimize_report_<mm-dd>_<模型名>.md`，可以并排读改动内容。
 
 **数字之外必须人工看的**：报告里的 `fixes` 有没有点到评测真正暴露的那处判据——点不到就是没看懂，篇幅和小节数再漂亮也不算过。
 
-**当前的模型分工**：评测优化要做因果定位再整篇重写，是三条流水线里最吃推理的，默认用 `MiniMax-M2.7-thinking`；其余流水线调用量大、重跑便宜，用 `qwen3.6-27b`。
+**当前的模型分工**：评测优化默认用 `MiniMax-M2.7`；其余流水线调用量大、重跑便宜，用 `qwen3.6-27b`。
+
+**一次实测结论（BGP AS号不匹配 那条评测）**：一度按"最吃推理就该上 thinking"把默认设成 `MiniMax-M2.7-thinking`，实测下来它最差——慢 11.8 倍，只给 2 条 fix，两条都依赖 BGP 错误码，而该评测现场 TCP 都没建起来、根本不会产生 NOTIFICATION，改完 agent 照样卡住；其中一条还把 Bad Peer AS 的 Error Code 写成 1（应为 2）。`MiniMax-M2.7` 覆盖最全（4 条，含明确删除"eBGP AS号必须不同"这句会放行的判据）且错误码正确。**推理强度不等于这个任务上的产出质量**——所以才需要这个对比入口，而不是照着模型规格挑。
 
 ---
 
@@ -338,6 +344,8 @@ python3 validate_skills.py skills_distilled/07-27
 | `## 优化skill：\`路径\`` | rewrite | 整篇覆盖原文件 |
 
 **落盘是幂等的**：append 先比对小节标题、create 遇到文件已存在就跳过、rewrite 内容一致就跳过。同一份报告重复执行不会写两遍。
+
+**审改动用 `--diff`**：整篇覆盖只报"9609→9956字符"看不出改了什么，而判据有没有真被改掉、原有场景有没有被顺手删掉，都得逐行看。`--diff` 一定不写文件（同时给了 `--apply` 也不写）。
 
 ### 整篇覆盖的防护
 

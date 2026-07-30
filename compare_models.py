@@ -26,7 +26,7 @@ from datetime import datetime
 from model_config import MODEL_PROFILES, resolve_model
 from skill_eval_optimize_pipeline import main as optimize_main
 
-DEFAULT_MODELS = ["qwen3.6-27b", "MiniMax-M2.7-thinking"]
+DEFAULT_MODELS = ["qwen3.6-27b", "MiniMax-M2.7"]
 
 EVALS_PATH = "evals"
 SKILL_DIR = "skills_distilled/07-27"
