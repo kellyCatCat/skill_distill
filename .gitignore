@@ -2,4 +2,6 @@ __pycache__/
 *.pyc
 result/
 skills_distilled/
+cmd_distilled/
 reports/skill_change_report_*.md
+reports/skill_optimize_report_*.md

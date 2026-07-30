@@ -2,13 +2,15 @@
 # -*- coding: utf-8 -*-
 """把已经人工审过的变更说明落盘到skill库。
 
-`skill_case_merge_pipeline.py` 的 DRY-RUN 只出报告不写文件，但改成
-DRY_RUN=False 重跑会让模型重新生成一遍——落盘的内容就不是你审过的那一份了。
-本脚本直接读 `reports/skill_change_report_<mm-dd>.md`，把其中"改动内容"
-折叠块里的markdown应用到skill目录：追加块拼到文件末尾，新建块写成新文件。
+`skill_case_merge_pipeline.py` 和 `skill_eval_optimize_pipeline.py` 的 DRY-RUN
+只出报告不写文件，但改成 DRY_RUN=False 重跑会让模型重新生成一遍——落盘的内容
+就不是你审过的那一份了。本脚本直接读 `reports/skill_change_report_<mm-dd>.md`
+或 `reports/skill_optimize_report_<mm-dd>.md`，把其中"改动内容"折叠块里的
+markdown应用到skill目录：追加块拼到文件末尾，新建块写成新文件，优化块整篇覆盖
+原文件。
 
-落盘是幂等的：追加前先比对小节标题，已经存在的小节跳过，所以同一份报告
-重复执行不会把内容追加两遍。
+落盘是幂等的：追加前先比对小节标题，已经存在的小节跳过；整篇覆盖前先比对内容，
+与现有文件一致时跳过。所以同一份报告重复执行不会把内容追加两遍。
 
 用法：
   python3 apply_change_report.py                       # 预演今天的报告，不写文件
@@ -21,13 +23,16 @@ import sys
 from datetime import datetime
 
 from skill_case_merge_pipeline import check_generated_content, section_headings
+from skill_eval_optimize_pipeline import check_optimized_content
 
 # 报告里每处改动的标题行，如：## 追加小节：`故障处理：IP路由/BGP故障案例.md`
-CHANGE_HEADING = re.compile(r"^## (追加小节|新建skill)：`([^`]+)`\s*$", re.MULTILINE)
+CHANGE_HEADING = re.compile(
+    r"^## (追加小节|新建skill|优化skill)：`([^`]+)`\s*$", re.MULTILINE)
 # 改动内容折叠块用四个反引号包裹，内部的三反引号代码块因此不会提前闭合
 CONTENT_BLOCK = re.compile(r"````markdown\s*\n(.*?)\n````", re.DOTALL)
 
-ACTION_BY_LABEL = {"追加小节": "append", "新建skill": "create"}
+ACTION_BY_LABEL = {"追加小节": "append", "新建skill": "create",
+                   "优化skill": "rewrite"}
 
 
 def parse_report(report_path: str) -> list:
@@ -69,9 +74,22 @@ def apply_one(change: dict, skill_dir: str, apply: bool) -> str:
         return f"[{'新建' if apply else '将新建'}] {target}"
 
     if not os.path.isfile(path):
-        return f"[FAIL] 追加的目标文件不存在: {target}"
+        return f"[FAIL] {'覆盖' if action == 'rewrite' else '追加'}的目标文件不存在: {target}"
     with open(path, 'r', encoding='utf-8') as f:
         existing = f.read()
+
+    if action == "rewrite":
+        # 幂等保护先于内容校验：内容与现有文件一致说明这份报告已经落过盘
+        if content.strip() == existing.strip():
+            return f"[SKIP] 内容与现有文件一致，无需覆盖: {target}"
+        error = check_optimized_content(content, existing, target)
+        if error:
+            return f"[FAIL] {target}: {error}"
+        if apply:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content + "\n")
+        return (f"[{'已覆盖' if apply else '将覆盖'}] {target}"
+                f"（{len(existing.strip())}→{len(content)}字符）")
 
     # 幂等保护先于内容校验：小节已在文件中说明这份报告已经落过盘，属于正常重复
     # 执行，不该报失败（否则同名小节会被内容校验判成FAIL）。
