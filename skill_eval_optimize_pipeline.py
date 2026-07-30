@@ -41,8 +41,14 @@ from skill_case_merge_pipeline import (BANNED_CONTENT_PATTERNS, WRITING_RULES,
                                        extract_json_block, section_headings)
 
 # 一条评测记录的起始标记，如：对应SKILL: IP路由/BGP故障案例.md
+# 路径用 .+? 而不是 \S+：skill 名里带空格是常态（MPLS TE故障案例.md、
+# SRv6 TE Policy故障案例.md），用 \S+ 会让这些整条记录都解析不出来。
+# 行尾的 \s*$ 保证只吃到本行，不会跨行。
 EVAL_RECORD_HEADING = re.compile(
     r"^\s*(?:对应|目标)?\s*(?:SKILL|skill|Skill)\s*[：:]\s*([^\r\n]+?\.md)\s*$", re.MULTILINE)
+
+# 没解析出记录时，用它找出"看着像标记但没匹配上"的行，好把原因指出来
+LOOKS_LIKE_MARKER = re.compile(r"^.*(?:SKILL|skill|Skill).*[：:].*$", re.MULTILINE)
 
 # 评测里的skill路径匹配不到、或匹配到多个时，在这里人工指定。
 # 键为评测中写的路径，值为skill库中的真实相对路径。
@@ -173,7 +179,10 @@ def load_evals(evals_path: str) -> tuple:
             text = f.read()
         found = parse_eval_text(text, os.path.relpath(path, os.path.dirname(evals_path) or "."))
         if not found:
-            unparsed.append(path)
+            # 把"看着像标记却没匹配上"的行带出来，否则只说"缺少标记"，
+            # 而实际上标记就写在那儿、只是格式差一点（路径没以.md结尾之类）
+            suspects = [line.strip() for line in LOOKS_LIKE_MARKER.findall(text)][:3]
+            unparsed.append({"path": path, "suspects": suspects})
             continue
         records += found
     return records, unparsed
@@ -463,8 +472,10 @@ def build_report(results: list, unresolved: list, unparsed: list,
 
     if unparsed:
         lines += ["", "## 没解析出评测记录的文件", ""]
-        for path in unparsed:
-            lines.append(f"- `{path}`：缺少“对应SKILL：<路径>”标记")
+        for item in unparsed:
+            lines.append(f"- `{item['path']}`：缺少“对应SKILL：<路径>”标记")
+            for line in item["suspects"]:
+                lines.append(f"  - 疑似标记但格式不符：`{line}`")
 
     return "\n".join(lines) + "\n"
 
@@ -496,8 +507,10 @@ def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
 
     records, unparsed = load_evals(EVALS_PATH)
     print(f"\n解析出 {len(records)} 条评测记录")
-    for path in unparsed:
-        print(f"[WARN] 没解析出评测记录（缺少“对应SKILL：<路径>”标记）: {path}")
+    for item in unparsed:
+        print(f"[WARN] 没解析出评测记录（缺少“对应SKILL：<路径>”标记）: {item['path']}")
+        for line in item["suspects"]:
+            print(f"        疑似标记但格式不符，需形如“对应SKILL: 一级目录/二级.md”: {line!r}")
     if not records:
         print("错误: 没有解析到任何评测记录")
         sys.exit(1)
