@@ -42,7 +42,7 @@ from skill_case_merge_pipeline import (BANNED_CONTENT_PATTERNS, WRITING_RULES,
 
 # 一条评测记录的起始标记，如：对应SKILL: IP路由/BGP故障案例.md
 EVAL_RECORD_HEADING = re.compile(
-    r"^\s*(?:对应|目标)?\s*(?:SKILL|skill|Skill)\s*[：:]\s*(\S+\.md)\s*$", re.MULTILINE)
+    r"^\s*(?:对应|目标)?\s*(?:SKILL|skill|Skill)\s*[：:]\s*([^\r\n]+?\.md)\s*$", re.MULTILINE)
 
 # 评测里的skill路径匹配不到、或匹配到多个时，在这里人工指定。
 # 键为评测中写的路径，值为skill库中的真实相对路径。
