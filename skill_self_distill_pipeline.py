@@ -226,11 +226,23 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                     f"（max_tokens={payload['max_tokens']}"
                     f"{'，thinking开启，推理token也占预算' if cfg['thinking'] else ''}），"
                     f"请增大max_tokens或拆分输入")
-            # 思考写满了预算、正文一个字没出的情况：报错比让提取器报“没找到内容”清楚
+            # 只回了推理、正文一个字没出。到这里说明 finish_reason 不是 length
+            # （截断在上面就拦了），所以未必是预算不够——也可能是模型自己结束了
+            # 回复。两种情况的处理方式完全不同，必须把 finish_reason 带出来。
             if not content and reasoning:
+                if finish_reason is None:
+                    advice = ("流在给出finish_reason之前就结束了，多半是输出预算耗尽或"
+                              "连接被截断，先调大 max_tokens（.env 里的 <前缀>_MAX_TOKENS）")
+                elif finish_reason == "stop":
+                    advice = ("模型自己结束了回复却没写正文，通常是这次任务对它太重"
+                              "（本流水线要整篇重写skill）：可减小单次输出量、"
+                              "或改用推理没这么重的模型")
+                else:
+                    advice = "按 finish_reason 判断原因"
                 raise Exception(
                     f"只返回了推理内容、正文为空（reasoning_content {len(reasoning)}字符，"
-                    f"max_tokens={payload['max_tokens']}），请增大max_tokens")
+                    f"finish_reason={finish_reason!r}，"
+                    f"max_tokens={payload['max_tokens']}）：{advice}")
 
             extracted_content = extractor(content)
             if not extracted_content:
