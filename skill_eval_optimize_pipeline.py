@@ -17,7 +17,12 @@
   4. 报告：输出 reports/skill_optimize_report_<mm-dd>.md，人工审过后用
      apply_change_report.py 落盘。
 
+评测里的"对应SKILL："写skill库中的相对路径，允许省略"故障处理："这类一级目录前缀
+（写"IP路由/BGP故障案例.md"能匹配到"故障处理：IP路由/BGP故障案例.md"）。匹配不唯一
+或找不到时脚本报错并给出最接近的候选，不会挑一个最像的去覆盖。
+
 用法：
+  python3 skill_eval_optimize_pipeline.py --check    # 只看评测匹配到哪篇skill，不调模型
   python3 skill_eval_optimize_pipeline.py            # 按文件末尾main()的默认参数运行
 """
 import json
@@ -27,7 +32,9 @@ import sys
 from datetime import datetime
 from multiprocessing import Pool
 
-from skill_self_distill_pipeline import call_model_with_retry, extract_markdown_content
+from skill_self_distill_pipeline import (_longest_common_substring_len,
+                                         _strip_generic_tokens,
+                                         call_model_with_retry, extract_markdown_content)
 from skill_case_merge_pipeline import (BANNED_CONTENT_PATTERNS, WRITING_RULES,
                                        extract_json_block, section_headings)
 
@@ -129,6 +136,30 @@ def load_evals(evals_path: str) -> tuple:
     return records, unparsed
 
 
+def suggest_candidates(rel: str, known_paths: set, limit: int = 3) -> list:
+    """按文件名相似度给出最接近的几个skill，只用于匹配失败时的提示。
+
+    刻意不拿它自动匹配：优化是整篇覆盖，匹配错就把另一篇skill的正文冲掉了，
+    所以拿不准时必须报错让人来定，而不是挑一个最像的。
+    """
+    base = _strip_generic_tokens(rel.split("/")[-1][:-3])
+    scored = []
+    for path in known_paths:
+        score = _longest_common_substring_len(
+            base, _strip_generic_tokens(path.split("/")[-1][:-3]))
+        if score >= 2:
+            scored.append((score, path))
+    return [p for _, p in sorted(scored, key=lambda x: (-x[0], x[1]))[:limit]]
+
+
+def _with_suggestions(message: str, rel: str, known_paths: set) -> str:
+    hits = suggest_candidates(rel, known_paths)
+    if not hits:
+        return message
+    return (f"{message}；最接近的候选: {'、'.join(hits)}"
+            f"（确认后写进评测的“对应SKILL：”行，或加进 EVAL_TARGET_OVERRIDES）")
+
+
 def resolve_skill_path(raw_target: str, known_paths: set) -> tuple:
     """把评测里写的skill路径匹配到skill库中的真实路径，返回 (真实路径, 匹配方式)。
 
@@ -173,7 +204,8 @@ def resolve_skill_path(raw_target: str, known_paths: set) -> tuple:
     if len(hits) > 1:
         raise ValueError(f"路径 {raw_target!r} 匹配到多个skill: {'、'.join(hits)}，"
                          f"请在 EVAL_TARGET_OVERRIDES 中指定")
-    raise ValueError(f"在skill库中找不到 {raw_target!r} 对应的skill")
+    raise ValueError(_with_suggestions(
+        f"在skill库中找不到 {raw_target!r} 对应的skill", rel, known_paths))
 
 
 def check_optimized_content(content: str, original: str, target_path: str = "") -> str:
@@ -328,6 +360,9 @@ def build_report(results: list, unresolved: list, unparsed: list,
             continue
         lines += ["", f"## 优化skill：`{r['target']}`", "",
                   f"- 评测来源：{'、'.join(r['sources'])}（{r['eval_count']} 条）",
+                  # 落盘会整篇覆盖，所以匹配方式要写进报告：不是精确匹配时，
+                  # 审的人得先确认覆盖的确实是这篇skill
+                  f"- 匹配方式：{r.get('match', '')}",
                   f"- 判定理由：{r.get('reason', '')}",
                   f"- 改动概要：{r.get('change_summary', '')}"]
         if r.get("fixes"):
@@ -355,7 +390,8 @@ def build_report(results: list, unresolved: list, unparsed: list,
     return "\n".join(lines) + "\n"
 
 
-def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_RUN=True):
+def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
+         DRY_RUN=True, CHECK_ONLY=False):
     print("=" * 60)
     print("按评测结果优化skill流水线")
     print("=" * 60)
@@ -387,17 +423,27 @@ def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     print(f"既有skill {len(known_paths)} 个")
 
     # 同一篇skill的多条评测合成一次调用，模型才能一次看到这篇的全部问题
+    print("\n评测记录 → skill 的匹配结果:")
     buckets, unresolved = {}, []
     for record in records:
         try:
             target, how = resolve_skill_path(record["raw_target"], known_paths)
         except ValueError as e:
             unresolved.append({**record, "error": str(e)})
-            print(f"[WARN] 定位失败: {record['raw_target']}: {e}")
+            print(f"  [FAIL] {record['raw_target']}（来源 {record['source']}）: {e}")
             continue
-        if target not in buckets:
-            print(f"  {record['raw_target']} → {target}（{how}）")
-        buckets.setdefault(target, []).append(record)
+        bucket = buckets.setdefault(target, {"records": [], "hows": []})
+        bucket["records"].append(record)
+        if how not in bucket["hows"]:
+            bucket["hows"].append(how)
+        print(f"  {record['raw_target']}（来源 {record['source']}） → {target}（{how}）")
+
+    # 优化是整篇覆盖，匹配错就把另一篇skill冲掉了，所以提供 --check 先只看匹配结果，
+    # 确认无误再花模型调用去跑优化。
+    if CHECK_ONLY:
+        print(f"\n--check：{len(buckets)} 篇skill待优化，"
+              f"{len(unresolved)} 条评测未匹配到skill（未调用模型，未写任何文件）")
+        sys.exit(1 if unresolved or not buckets else 0)
 
     if not buckets:
         print("错误: 没有一条评测记录能定位到skill")
@@ -406,15 +452,17 @@ def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     skill_catalog = "\n".join(f"- [{p}]" for p in sorted(known_paths))
 
     task_args = []
-    for target, target_records in sorted(buckets.items()):
+    for target, bucket in sorted(buckets.items()):
         with open(os.path.join(SKILL_DIR, *target.split("/")),
                   'r', encoding='utf-8', errors='replace') as f:
             original = f.read()
-        task_args.append((target, target_records, original, skill_catalog,
+        task_args.append((target, bucket["records"], original, skill_catalog,
                           API_URL, MODEL_NAME))
 
     with Pool(processes=WORKERS) as pool:
         results = pool.map(optimize_skill, task_args)
+    for result in results:
+        result["match"] = "；".join(buckets[result["target"]]["hows"])
 
     print("\n" + "=" * 60)
     for result in results:
@@ -454,4 +502,6 @@ if __name__ == "__main__":
         # 整篇覆盖会丢掉原文，确认报告无误后用 apply_change_report.py 落盘，
         # 而不是改这里重跑——重跑会让模型重新生成，落盘的就不是审过的那份。
         DRY_RUN=True,
+        # 加 --check 只跑到匹配这一步：先确认每条评测落在哪篇skill上，再花模型调用
+        CHECK_ONLY="--check" in sys.argv[1:],
     )

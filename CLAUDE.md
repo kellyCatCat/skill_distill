@@ -4,11 +4,11 @@
 
 - `skill_self_distill_pipeline.py`：主流水线。扫描源文档树（`result/v01/tree`），按"一级目录/二级目录"分组，调用大模型把每组文档合并转换为一个 skill（输出为 `<一级中文>/<二级中文>.md`），并生成 `skill_tree_structure.txt` 与 `conversion_report.json`。散落在一级目录下的文档会自动并入名称最相似的既有二级分组；若该一级目录没有二级目录，则全部合并为 `<一级名去前缀>故障案例.md`（如 `故障处理：QoS` → `QoS故障案例.md`），归并明细会在运行时打印。
 - `skill_case_merge_pipeline.py`：增量并入流水线。读取 `cases/*.json` 里的新故障案例，先定位每个案例组应并入哪个既有 skill（或需要新建），再判定 `covered`（已覆盖）/ `append`（追加小节）/ `create`（新建 skill）并写入，最后输出 `reports/skill_change_report_<mm-dd>.md` 变更说明。`DRY_RUN=True` 只出报告不落盘。
-- `skill_eval_optimize_pipeline.py`：评测优化流水线。读取 `evals/` 下的排障评测结果（自然语言，按 `对应SKILL：<路径>` 标记切分记录），把 skill 全文与评测结论交给大模型，定位是哪一步判据误导了排障 agent 并改掉，产出**整篇**优化后的 skill（改判据要动既有正文，所以不是追加而是整篇重写），输出 `reports/skill_optimize_report_<mm-dd>.md`。prompt 里内置 5 类缺陷的定位方法：单端判据、会提前放行的错误判据、缺失的排查落点、顺序不合理、同一根因散落重复。评测里的 skill 路径常省略 `故障处理：` 前缀，脚本按一级目录后缀/文件名匹配到真实路径，歧义时报错并要求在 `EVAL_TARGET_OVERRIDES` 里指定。整篇覆盖会丢原文，所以落盘前校验篇幅与小节数不得缩到原文的 60% 以下。`DRY_RUN=True` 只出报告不落盘。
+- `skill_eval_optimize_pipeline.py`：评测优化流水线。读取 `evals/` 下的排障评测结果（自然语言，按 `对应SKILL：<路径>` 标记切分记录），把 skill 全文与评测结论交给大模型，定位是哪一步判据误导了排障 agent 并改掉，产出**整篇**优化后的 skill（改判据要动既有正文，所以不是追加而是整篇重写），输出 `reports/skill_optimize_report_<mm-dd>.md`。prompt 里内置 5 类缺陷的定位方法：单端判据、会提前放行的错误判据、缺失的排查落点、顺序不合理、同一根因散落重复。评测里的 `对应SKILL：` 写 skill 库中的相对路径，允许省略 `故障处理：` 这类一级目录前缀（写 `IP路由/BGP故障案例.md` 能匹配到 `故障处理：IP路由/BGP故障案例.md`）；匹配顺序为 `EVAL_TARGET_OVERRIDES` → 精确路径 → 一级目录后缀 → 文件名，不唯一或找不到时报错并给出最接近的候选，**不会挑一个最像的去覆盖**。加 `--check` 只跑到匹配这一步，先确认每条评测落在哪篇 skill 上再花模型调用。整篇覆盖会丢原文，所以落盘前校验篇幅与小节数不得缩到原文的 60% 以下，报告里也会写明匹配方式供审核。`DRY_RUN=True` 只出报告不落盘。
 - `apply_change_report.py`：把人工审过的 `reports/skill_change_report_*.md` 或 `reports/skill_optimize_report_*.md` 落盘到 skill 目录（追加块拼到文件末尾、新建块写成新文件、优化块整篇覆盖原文件）。改 `DRY_RUN=False` 重跑会让模型重新生成，落盘的就不是审过的那份，所以审完用这个脚本落盘。默认预演，加 `--apply` 才写文件；落盘是幂等的（追加前比对小节标题，覆盖前比对内容），重复执行不会写两遍。
 - `validate_skills.py`：校验生成的 skill 是否完整合规（frontmatter、截断、残留引用、禁用短语等），存在 ERROR 时退出码为 1。
 - `extract_display_commands.py`：从 skill 里抽取 `display xxx` 查询命令，按源文件一一对照输出 json（`skills_distilled/07-27/<一级>/<二级>.md` → `cmd_distilled/07-27/<一级>/<二级>.json`，内容为 list of string）。行内代码与围栏代码块都扫，按出现顺序去重。
-- `cases/`：新增故障案例的原始数据（入库）；`evals/`：排障评测结果（入库）；`reports/`：变更说明，其中运行时生成的 `skill_change_report_*.md`、`skill_optimize_report_*.md` 不入库。
+- `cases/`：新增故障案例的原始数据（入库）；`evals/`：排障评测结果（**不入库**，见 `.gitignore`）；`reports/`：变更说明，其中运行时生成的 `skill_change_report_*.md`、`skill_optimize_report_*.md` 不入库。
 
 源文档树和生成的 skill 不入库（见 `.gitignore`）。
 
