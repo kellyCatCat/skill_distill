@@ -25,6 +25,42 @@ REASONING_BLOCK_PATTERN = re.compile(
     r"<(think|thinking|reasoning)>.*?</\1>\s*", re.DOTALL | re.IGNORECASE)
 
 
+def parse_sse_stream(text: str) -> tuple:
+    """把SSE流拼回 (正文, 推理内容, finish_reason)。
+
+    有的端点无视 `stream: False`，一律返回 text/event-stream（本项目里
+    MiniMax 那个部署就是这样），响应体形如：
+        data: {"choices":[{"delta":{"content":"…","reasoning_content":"…"},…}]}
+        data: [DONE]
+    正文与推理分别累加；最后一个非空的 finish_reason 为准。个别端点在收尾那条
+    里给的是完整的 message 而不是 delta，所以两个字段都认。
+    """
+    content_parts, reasoning_parts, finish_reason, chunks = [], [], None, 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(data)
+        except ValueError:
+            continue
+        chunks += 1
+        for choice in chunk.get("choices") or ():
+            delta = choice.get("delta") or choice.get("message") or {}
+            if delta.get("content"):
+                content_parts.append(delta["content"])
+            if delta.get("reasoning_content"):
+                reasoning_parts.append(delta["reasoning_content"])
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+    if not chunks:
+        raise ValueError("SSE流里没有解析出任何 data: 块")
+    return "".join(content_parts), "".join(reasoning_parts), finish_reason
+
+
 def strip_reasoning(content: str) -> str:
     """剥掉内联的推理块；只有开标签没有闭标签时（被截断）丢弃该标签之前的内容。"""
     content = REASONING_BLOCK_PATTERN.sub("", content or "")
@@ -156,28 +192,34 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                 verify=False
             )
             response.raise_for_status()
-            # 响应体不是JSON时，json()只会抛"Expecting value: line 1 column 1"，
-            # 看不出是模型输出有问题还是这一层就没拿到东西。把状态码、类型和正文
-            # 开头带出来，否则长耗时的thinking调用失败后完全没法定位。
-            try:
-                res_json = response.json()
-            except ValueError:
-                body = (response.text or "").strip()
-                hint = ""
-                if not body:
-                    hint = ("；响应体为空，通常是网关/代理在模型生成完之前就断开了连接"
-                            "（可先用 python3 model_config.py --probe 确认链路）")
-                elif "text/event-stream" in response.headers.get("Content-Type", ""):
-                    hint = "；返回的是SSE流，该端点可能忽略了 stream=False"
-                raise Exception(
-                    f"响应体不是JSON（HTTP {response.status_code}，"
-                    f"Content-Type={response.headers.get('Content-Type', '?')}，"
-                    f"{len(body)}字符，开头: {body[:200]!r}）{hint}")
-            choice = res_json['choices'][0]
-            message = choice['message']
-            content = strip_reasoning(message.get('content') or "")
+            if "text/event-stream" in response.headers.get("Content-Type", ""):
+                # SSE的Content-Type通常不带charset，requests会退回ISO-8859-1，
+                # 中文全成乱码，必须显式指定
+                response.encoding = "utf-8"
+                raw_content, reasoning, finish_reason = parse_sse_stream(response.text)
+            else:
+                # 响应体不是JSON时，json()只会抛"Expecting value: line 1 column 1"，
+                # 看不出是模型输出有问题还是这一层就没拿到东西。把状态码、类型和正文
+                # 开头带出来，否则长耗时的thinking调用失败后完全没法定位。
+                try:
+                    res_json = response.json()
+                except ValueError:
+                    body = (response.text or "").strip()
+                    hint = ""
+                    if not body:
+                        hint = ("；响应体为空，通常是网关/代理在模型生成完之前就断开了"
+                                "连接（可先用 python3 model_config.py --probe 确认链路）")
+                    raise Exception(
+                        f"响应体不是JSON（HTTP {response.status_code}，"
+                        f"Content-Type={response.headers.get('Content-Type', '?')}，"
+                        f"{len(body)}字符，开头: {body[:200]!r}）{hint}")
+                choice = res_json['choices'][0]
+                message = choice['message']
+                raw_content = message.get('content') or ""
+                reasoning = message.get('reasoning_content') or ""
+                finish_reason = choice.get('finish_reason')
 
-            finish_reason = choice.get('finish_reason')
+            content = strip_reasoning(raw_content)
             if finish_reason == 'length':
                 raise Exception(
                     f"输出被截断(finish_reason=length)，正文{len(content)}字符"
@@ -185,11 +227,10 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                     f"{'，thinking开启，推理token也占预算' if cfg['thinking'] else ''}），"
                     f"请增大max_tokens或拆分输入")
             # 思考写满了预算、正文一个字没出的情况：报错比让提取器报“没找到内容”清楚
-            if not content and message.get('reasoning_content'):
+            if not content and reasoning:
                 raise Exception(
-                    f"只返回了推理内容、正文为空（reasoning_content "
-                    f"{len(message['reasoning_content'])}字符，max_tokens="
-                    f"{payload['max_tokens']}），请增大max_tokens")
+                    f"只返回了推理内容、正文为空（reasoning_content {len(reasoning)}字符，"
+                    f"max_tokens={payload['max_tokens']}），请增大max_tokens")
 
             extracted_content = extractor(content)
             if not extracted_content:

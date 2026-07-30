@@ -149,6 +149,20 @@ def probe(cfg: dict, timeout: int = 120) -> str:
     except requests.exceptions.RequestException as e:
         return f"[FAIL] 请求发不出去: {type(e).__name__}: {e}"
 
+    content_type = response.headers.get("Content-Type", "?")
+    if "text/event-stream" in content_type:
+        # 有的端点无视 stream=False 一律返回SSE，这是可以正常工作的形态，不算失败
+        response.encoding = "utf-8"
+        from skill_self_distill_pipeline import parse_sse_stream
+        try:
+            content, reasoning, _ = parse_sse_stream(response.text)
+        except ValueError as e:
+            return f"[FAIL] SSE流解析失败: {e}"
+        note = f"，另有 reasoning_content {len(reasoning)}字符" if reasoning else ""
+        return (f"[OK] HTTP {response.status_code}，SSE流（该端点无视stream=False，"
+                f"已按流式解析），content={content.strip()[:40]!r}{note}")
+
+    response.encoding = response.encoding or "utf-8"
     body = (response.text or "").strip()
     if response.status_code >= 400:
         return f"[FAIL] HTTP {response.status_code}，正文开头: {body[:200]!r}"
@@ -157,7 +171,7 @@ def probe(cfg: dict, timeout: int = 120) -> str:
     except ValueError:
         detail = "响应体为空" if not body else f"开头: {body[:200]!r}"
         return (f"[FAIL] HTTP {response.status_code} 但响应体不是JSON"
-                f"（Content-Type={response.headers.get('Content-Type', '?')}，{detail}）")
+                f"（Content-Type={content_type}，{detail}）")
     try:
         message = res_json["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):

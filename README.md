@@ -71,11 +71,14 @@ python3 model_config.py --probe
 用 `max_tokens=16` 的最小请求验证鉴权、响应体是否为 JSON、回复结构能否取到 `content`：
 
 ```
-    探测      : [OK] HTTP 200，content='OK'，另有 reasoning_content 3字符
+    探测      : [OK] HTTP 200，content='OK'
+    探测      : [OK] HTTP 200，SSE流（该端点无视stream=False，已按流式解析），content='OK'，另有 reasoning_content 3字符
     探测      : [FAIL] HTTP 200 但响应体不是JSON（Content-Type=text/html，响应体为空）
 ```
 
 优化流水线一次调用要几分钟，先探测能避免等十几分钟才发现是链路问题。
+
+**关于 SSE**：有的端点无视 `stream: False`、一律返回 `text/event-stream`。这是可正常工作的形态——`call_model_with_retry` 会把流拼回完整回复，`content` 与 `reasoning_content` 分别累加，并显式按 UTF-8 解码（SSE 的 Content-Type 通常不带 charset，否则中文会成乱码）。
 
 ---
 
