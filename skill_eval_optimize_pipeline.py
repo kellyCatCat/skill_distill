@@ -28,10 +28,12 @@
 import json
 import os
 import re
+import time
 import sys
 from datetime import datetime
 from multiprocessing import Pool
 
+from model_config import resolve_model
 from skill_self_distill_pipeline import (_longest_common_substring_len,
                                          _strip_generic_tokens,
                                          call_model_with_retry, extract_markdown_content)
@@ -265,7 +267,8 @@ def format_eval_detail(records: list) -> str:
 
 
 def optimize_skill(args: tuple) -> dict:
-    target, records, original, skill_catalog, api_url, model_name = args
+    (target, records, original, skill_catalog, api_url, model_name,
+     max_tokens, timeout) = args
     eval_detail = format_eval_detail(records)
     prompt = (OPTIMIZE_PROMPT_TEMPLATE
               .replace("<target_path>", target)
@@ -275,10 +278,15 @@ def optimize_skill(args: tuple) -> dict:
               .replace("<writing_rules>", WRITING_RULES))
     print(f"[PID {os.getpid()}] 优化: {target}（{len(records)} 条评测）")
 
-    result = {"target": target, "eval_count": len(records),
-              "sources": sorted({r["source"] for r in records})}
+    started = time.time()
+    result = {"target": target, "eval_count": len(records), "model": model_name,
+              "sources": sorted({r["source"] for r in records}),
+              "original_chars": len(original.strip()),
+              "original_sections": len(section_headings(original))}
     reply = call_model_with_retry(api_url, model_name, prompt,
-                                  extractor=make_optimize_extractor(original, target))
+                                  extractor=make_optimize_extractor(original, target),
+                                  max_tokens=max_tokens, timeout=timeout)
+    result["elapsed"] = round(time.time() - started, 1)
     if reply.startswith("错误："):
         result["error"] = reply
         return result
@@ -391,13 +399,21 @@ def build_report(results: list, unresolved: list, unparsed: list,
 
 
 def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
-         DRY_RUN=True, CHECK_ONLY=False):
+         DRY_RUN=True, CHECK_ONLY=False, MAX_TOKENS=None, TIMEOUT=900,
+         EXIT_ON_FAILURE=True):
+    """EXIT_ON_FAILURE=False 时返回结果供 compare_models.py 汇总，不退出进程。"""
     print("=" * 60)
     print("按评测结果优化skill流水线")
     print("=" * 60)
+    cfg = resolve_model(MODEL_NAME, API_URL)
     print(f"\n评测来源: {EVALS_PATH}")
     print(f"skill目录: {SKILL_DIR}")
-    print(f"模型: {MODEL_NAME} @ {API_URL}")
+    print(f"模型: {MODEL_NAME} @ {cfg['api_url']}"
+          f"（thinking {'开' if cfg['thinking'] else '关'}，"
+          f"max_tokens {MAX_TOKENS or cfg['max_tokens']}）")
+    if not cfg["registered"]:
+        print(f"[WARN] {MODEL_NAME} 未登记在 model_config.MODEL_PROFILES 里，"
+              f"按不开思考、默认预算处理")
     print(f"并行Worker数: {WORKERS}{'（DRY-RUN）' if DRY_RUN else ''}")
 
     if not os.path.exists(EVALS_PATH):
@@ -457,7 +473,7 @@ def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
                   'r', encoding='utf-8', errors='replace') as f:
             original = f.read()
         task_args.append((target, bucket["records"], original, skill_catalog,
-                          API_URL, MODEL_NAME))
+                          API_URL, MODEL_NAME, MAX_TOKENS, TIMEOUT))
 
     with Pool(processes=WORKERS) as pool:
         results = pool.map(optimize_skill, task_args)
@@ -487,15 +503,22 @@ def main(EVALS_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
     failed = [r for r in results if r.get("error") or r.get("invalid")]
     if failed or unresolved:
         print(f"\n存在 {len(failed) + len(unresolved)} 个处理失败项，请查看变更说明后重跑")
-        sys.exit(1)
+        if EXIT_ON_FAILURE:
+            sys.exit(1)
+    return {"model": MODEL_NAME, "results": results, "unresolved": unresolved,
+            "unparsed": unparsed, "report_path": REPORT_PATH}
 
 
 if __name__ == "__main__":
     main(
         EVALS_PATH="evals",
         SKILL_DIR="skills_distilled/07-27",
-        API_URL="http://76.64.185.52:2207/v1/chat/completions",
-        MODEL_NAME="qwen3.6-27b",
+        # 地址与密钥从 .env 按模型名解析（见 model_config.py），不必写死在这里；
+        # 要临时指向别的部署时才传 API_URL。
+        API_URL=None,
+        # 这条流水线要做因果定位（评测里的哪一步判据误导了agent）再整篇重写skill，
+        # 是三条流水线里最吃推理的，所以默认用thinking档；换回小模型只需改这里。
+        MODEL_NAME="MiniMax-M2.7-thinking",
         WORKERS=3,
         # 变更说明写在skill目录外，避免被validate_skills.py当成skill校验
         REPORT_PATH=f"reports/skill_optimize_report_{datetime.now().strftime('%m-%d')}.md",
@@ -504,4 +527,8 @@ if __name__ == "__main__":
         DRY_RUN=True,
         # 加 --check 只跑到匹配这一步：先确认每条评测落在哪篇skill上，再花模型调用
         CHECK_ONLY="--check" in sys.argv[1:],
+        # 留空用该模型在 model_config 里的预算；整篇重写撞上限时在这里单独调大
+        MAX_TOKENS=None,
+        # thinking模型出一篇完整skill比不开思考慢不少，超时给足
+        TIMEOUT=900,
     )

@@ -10,8 +10,27 @@ from pathlib import Path
 from datetime import datetime
 from multiprocessing import Pool
 
+from model_config import resolve_model
+
+# 模型主机不走代理。各模型的主机由 model_config.resolve_model 按 .env 里的地址
+# 追加进 NO_PROXY，这里只保留最早那台内网机器，避免旧的调用方式失效。
 os.environ['NO_PROXY'] = '76.64.185.52'
 os.environ['no_proxy'] = '76.64.185.52'
+
+# thinking模型有两种放推理过程的方式：独立的 reasoning_content 字段（content干净，
+# 无需处理），或内联在content里的 <think>…</think>。后者必须剥掉——提取器抓的是
+# 第一个```json/```markdown围栏，推理过程里出现的围栏会被当成正式输出。
+REASONING_BLOCK_PATTERN = re.compile(
+    r"<(think|thinking|reasoning)>.*?</\1>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def strip_reasoning(content: str) -> str:
+    """剥掉内联的推理块；只有开标签没有闭标签时（被截断）丢弃该标签之前的内容。"""
+    content = REASONING_BLOCK_PATTERN.sub("", content or "")
+    unclosed = re.search(r"<(?:think|thinking|reasoning)>", content, re.IGNORECASE)
+    if unclosed:
+        content = content[:unclosed.start()]
+    return content.strip()
 
 
 PROMPT_TEMPLATE = """你是一个ipran网络运维专家，需要在网管侧完成一份排障手册，将同一分类目录下的多篇输入文档合并转为一个完整的skill。
@@ -101,38 +120,59 @@ def extract_markdown_content(text: str) -> str:
 
 def call_model_with_retry(api_url: str, model_name: str, question: str, max_retries: int = 3,
                           retry_delay: float = 1.0, extractor=extract_markdown_content,
-                          temperature: float = 0.4) -> str:
+                          temperature: float = 0.4, max_tokens: int = None,
+                          timeout: int = 300) -> str:
     """extractor 从模型回复中提取有效内容，返回空串表示本次回复无效需重试。
 
     temperature 默认0.4适合写作类调用；分类判断类调用（如把案例归到哪个skill）
-    传0，避免同一批案例每次跑出不同的归类结果。"""
+    传0，避免同一批案例每次跑出不同的归类结果。
+
+    地址、密钥、是否开思考、输出预算按 model_name 从 model_config 解析（见 .env）；
+    api_url 显式传入时优先，max_tokens 显式传入时覆盖该模型的默认预算——评测优化
+    要整篇重写skill，比其它调用更吃输出预算。"""
+    cfg = resolve_model(model_name, api_url)
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": question}],
         "stream": False,
         "temperature": temperature,
-        "max_tokens": 16384,
-        "chat_template_kwargs": {"enable_thinking": False, "thinking": False}
+        "max_tokens": max_tokens or cfg["max_tokens"],
     }
+    # 只在该模型不开思考时才发关思考的字段：把这个字段发给thinking模型会把思考
+    # 压掉，等于花大模型的钱拿小模型的输出。
+    if not cfg["thinking"]:
+        payload["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
+    headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else None
 
     last_error = None
     for attempt in range(max_retries):
         try:
             response = requests.post(
-                api_url,
+                cfg["api_url"],
                 json=payload,
-                timeout=300,
+                headers=headers,
+                timeout=timeout,
                 verify=False
             )
             response.raise_for_status()
             res_json = response.json()
             choice = res_json['choices'][0]
             message = choice['message']
-            content = message.get('content') or ""
+            content = strip_reasoning(message.get('content') or "")
 
             finish_reason = choice.get('finish_reason')
             if finish_reason == 'length':
-                raise Exception(f"输出被截断(finish_reason=length)，内容长度{len(content)}字符，请增大max_tokens或拆分输入")
+                raise Exception(
+                    f"输出被截断(finish_reason=length)，正文{len(content)}字符"
+                    f"（max_tokens={payload['max_tokens']}"
+                    f"{'，thinking开启，推理token也占预算' if cfg['thinking'] else ''}），"
+                    f"请增大max_tokens或拆分输入")
+            # 思考写满了预算、正文一个字没出的情况：报错比让提取器报“没找到内容”清楚
+            if not content and message.get('reasoning_content'):
+                raise Exception(
+                    f"只返回了推理内容、正文为空（reasoning_content "
+                    f"{len(message['reasoning_content'])}字符，max_tokens="
+                    f"{payload['max_tokens']}），请增大max_tokens")
 
             extracted_content = extractor(content)
             if not extracted_content:

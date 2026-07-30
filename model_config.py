@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""模型接入配置：地址、密钥、输出预算、是否开思考。
+
+地址和密钥放在不入库的 `.env` 里（格式见 `.env.example`），这里只登记每个模型的
+调用参数。三条流水线都通过 `skill_self_distill_pipeline.call_model_with_retry`
+走到这里，传模型名即可，不必各自记地址。
+
+为什么要按模型分别配 thinking：原先payload里写死了
+`chat_template_kwargs={"enable_thinking": False}`——那是给qwen关思考用的，
+套到 MiniMax-M2.7-thinking 上会把思考压掉，等于花大模型的钱拿小模型的输出。
+
+用法：
+  python3 model_config.py            # 打印当前解析出的配置（密钥打码），自查用
+"""
+import os
+import re
+import sys
+
+ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+# 每个模型的调用参数。base_url / api_key / max_tokens 从 .env 里按这些环境变量名取。
+#
+# max_tokens：thinking模型的推理token也算进输出预算，而评测优化要整篇重写
+# 近万字符的skill，16384不够用，所以thinking档给到32768。撞上限会报
+# finish_reason=length，按报错调大即可。
+#
+# thinking=False 时才发送关思考的 chat_template_kwargs；thinking=True 时
+# 整个字段都不发，让模型按自己的默认行为思考——不猜各家开思考的字段名。
+MODEL_PROFILES = {
+    "qwen3.6-27b": {
+        "env_prefix": "QWEN",
+        "thinking": False,
+        "max_tokens": 16384,
+    },
+    "MiniMax-M2.7": {
+        "env_prefix": "MINIMAX",
+        "thinking": False,
+        "max_tokens": 32768,
+    },
+    "MiniMax-M2.7-thinking": {
+        "env_prefix": "MINIMAX",
+        "thinking": True,
+        "max_tokens": 32768,
+    },
+}
+
+# 没登记的模型名按这个兜底，仍可用 api_url 参数直接指定地址
+DEFAULT_PROFILE = {"env_prefix": "QWEN", "thinking": False, "max_tokens": 16384}
+
+
+def load_env_file(path: str = ENV_PATH) -> dict:
+    """读 .env（KEY=VALUE，# 开头为注释）。已存在的环境变量优先，不被覆盖。"""
+    values = {}
+    if not os.path.isfile(path):
+        return values
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip("'\"")
+            # 真实环境变量优先，方便临时覆盖：QWEN_BASE_URL=... python3 xxx.py
+            values[key] = os.environ.get(key) or value
+    return values
+
+
+def chat_completions_url(base_url: str) -> str:
+    """把 .../v1 补成 .../v1/chat/completions；已经是完整路径的原样返回。"""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
+def _allow_direct_connection(url: str) -> None:
+    """把模型主机加进 NO_PROXY，避免请求被本机/环境里的代理拦掉。"""
+    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
+    if not host:
+        return
+    for var in ("NO_PROXY", "no_proxy"):
+        current = [h for h in os.environ.get(var, "").split(",") if h]
+        if host not in current:
+            os.environ[var] = ",".join(current + [host])
+
+
+def resolve_model(model_name: str, api_url: str = None) -> dict:
+    """解析出调用一个模型需要的全部参数。
+
+    api_url 显式传入时优先（流水线里旧的 API_URL 参数仍然生效），否则按模型名
+    从 .env 里取地址。
+    """
+    profile = MODEL_PROFILES.get(model_name, DEFAULT_PROFILE)
+    env = load_env_file()
+    prefix = profile["env_prefix"]
+
+    url = chat_completions_url(api_url or env.get(f"{prefix}_BASE_URL", ""))
+    if not url:
+        raise ValueError(
+            f"模型 {model_name!r} 没有可用地址：请在 .env 里设置 {prefix}_BASE_URL"
+            f"（可参考 .env.example），或调用时显式传 api_url")
+    _allow_direct_connection(url)
+
+    max_tokens = env.get(f"{prefix}_MAX_TOKENS", "").strip()
+    return {
+        "model": model_name,
+        "api_url": url,
+        "api_key": env.get(f"{prefix}_API_KEY", "").strip(),
+        "max_tokens": int(max_tokens) if max_tokens.isdigit() else profile["max_tokens"],
+        "thinking": profile["thinking"],
+        "registered": model_name in MODEL_PROFILES,
+    }
+
+
+def _mask(secret: str) -> str:
+    if not secret:
+        return "（无，按不鉴权处理）"
+    return f"{secret[:7]}…{secret[-4:]}（{len(secret)}字符）"
+
+
+def main():
+    print("=" * 72)
+    print(f"模型接入配置（.env: {'已读取' if os.path.isfile(ENV_PATH) else '不存在'}）")
+    print("=" * 72)
+    for name in MODEL_PROFILES:
+        try:
+            cfg = resolve_model(name)
+        except ValueError as e:
+            print(f"\n● {name}\n    [FAIL] {e}")
+            continue
+        print(f"\n● {name}")
+        print(f"    地址      : {cfg['api_url']}")
+        print(f"    密钥      : {_mask(cfg['api_key'])}")
+        print(f"    max_tokens: {cfg['max_tokens']}")
+        print(f"    思考      : {'开（不发关思考的字段）' if cfg['thinking'] else '关'}")
+    print(f"\nNO_PROXY: {os.environ.get('NO_PROXY', '（空）')}")
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
