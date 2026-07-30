@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from multiprocessing import Pool
 
+from build_skill_tree import render_tree, write_tree_file
 from model_config import resolve_model
 
 # 模型主机不走代理。各模型的主机由 model_config.resolve_model 按 .env 里的地址
@@ -440,29 +441,13 @@ def main(SOURCE_TREE_DIR, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, GROUPS=None)
             print(f"  - {r['group']} ({len(r['source_paths'])} 个文档): {r['content']}")
 
     # 生成references风格的skill树结构（可直接挂到总SKILL.md的# references下），
-    # 引用skill时用 [相对路径]，agent直接Read该路径。
-    listing_lines = ["# references", f"- {OUTPUT_DIR}"]
-    seen_cats = set()
-    for key in all_keys:
-        if len(key) == 2:
-            if key[0] not in seen_cats:
-                listing_lines.append(f"  - {key[0]}")
-                seen_cats.add(key[0])
-            listing_lines.append(f"    - {key[1]}.md")
-        elif len(key) == 1:
-            listing_lines.append(f"  - {key[0]}.md")
-        else:
-            listing_lines.append("  - root.md")
-    skill_tree_text = "\n".join(listing_lines)
-
-    tree_output_path = os.path.join(OUTPUT_DIR, "skill_tree_structure.txt")
-    with open(tree_output_path, 'w', encoding='utf-8') as f:
-        f.write(f"Skill树结构图\n")
-        f.write(f"输出目录: {OUTPUT_DIR}\n")
-        f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("引用格式: [一级目录/二级目录.md]，agent直接Read该相对路径\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(skill_tree_text)
+    # 引用skill时用 [相对路径]，agent直接Read该路径。渲染与写文件共用
+    # build_skill_tree 里的实现，那边还提供了按目录重新生成的入口——本次列的是
+    # 源文档树的分组（含转换失败、磁盘上没有文件的分组），并入新skill之后要刷新
+    # 这份树，跑 `python3 build_skill_tree.py <目录>` 按实际目录重建。
+    skill_tree_text = render_tree(
+        [group_key_to_rel_path(key) for key in all_keys], OUTPUT_DIR)
+    tree_output_path = write_tree_file(OUTPUT_DIR, skill_tree_text)
 
     print(f"\n树结构图已保存到: {tree_output_path}")
     print("\n" + skill_tree_text)
