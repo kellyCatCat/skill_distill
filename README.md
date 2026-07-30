@@ -62,6 +62,21 @@ python3 model_config.py
 
 密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给 thinking 模型会把思考压掉，所以 `thinking=True` 的模型完全不发这个字段。
 
+### 3. 探测链路是否真的通（建议先跑）
+
+```bash
+python3 model_config.py --probe
+```
+
+用 `max_tokens=16` 的最小请求验证鉴权、响应体是否为 JSON、回复结构能否取到 `content`：
+
+```
+    探测      : [OK] HTTP 200，content='OK'，另有 reasoning_content 3字符
+    探测      : [FAIL] HTTP 200 但响应体不是JSON（Content-Type=text/html，响应体为空）
+```
+
+优化流水线一次调用要几分钟，先探测能避免等十几分钟才发现是链路问题。
+
 ---
 
 ## 场景 1：首次批量蒸馏

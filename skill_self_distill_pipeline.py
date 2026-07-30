@@ -156,7 +156,23 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                 verify=False
             )
             response.raise_for_status()
-            res_json = response.json()
+            # 响应体不是JSON时，json()只会抛"Expecting value: line 1 column 1"，
+            # 看不出是模型输出有问题还是这一层就没拿到东西。把状态码、类型和正文
+            # 开头带出来，否则长耗时的thinking调用失败后完全没法定位。
+            try:
+                res_json = response.json()
+            except ValueError:
+                body = (response.text or "").strip()
+                hint = ""
+                if not body:
+                    hint = ("；响应体为空，通常是网关/代理在模型生成完之前就断开了连接"
+                            "（可先用 python3 model_config.py --probe 确认链路）")
+                elif "text/event-stream" in response.headers.get("Content-Type", ""):
+                    hint = "；返回的是SSE流，该端点可能忽略了 stream=False"
+                raise Exception(
+                    f"响应体不是JSON（HTTP {response.status_code}，"
+                    f"Content-Type={response.headers.get('Content-Type', '?')}，"
+                    f"{len(body)}字符，开头: {body[:200]!r}）{hint}")
             choice = res_json['choices'][0]
             message = choice['message']
             content = strip_reasoning(message.get('content') or "")

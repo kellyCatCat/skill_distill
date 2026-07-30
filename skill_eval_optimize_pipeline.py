@@ -210,6 +210,35 @@ def resolve_skill_path(raw_target: str, known_paths: set) -> tuple:
         f"在skill库中找不到 {raw_target!r} 对应的skill", rel, known_paths))
 
 
+FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*(?:\n|$)", re.DOTALL)
+
+
+def restore_frontmatter(content: str, original: str) -> tuple:
+    """模型整篇重写时经常只输出正文、把frontmatter丢掉。
+
+    优化改的是正文里的判据，name/description本来就不需要动，所以缺失时直接把原文的
+    frontmatter补回来——比整轮判失败重跑三次更合适（qwen连试三次都漏这一段）。
+    模型自己输出了frontmatter时以它为准，不覆盖。返回 (内容, 是否补过)。
+    """
+    content = (content or "").strip()
+    if not content or FRONTMATTER_PATTERN.match(content):
+        return content, False
+    match = FRONTMATTER_PATTERN.match((original or "").lstrip())
+    if not match:
+        return content, False
+    return f"{match.group(0).strip()}\n\n{content}", True
+
+
+def prepare_optimized_content(reply: str, original: str, target_path: str = "") -> tuple:
+    """从回复里取出 (判定, 内容, 是否补过frontmatter, 错误说明)。"""
+    decision = extract_json_block(reply)
+    if decision.get("action") == "no-change":
+        return decision, "", False, ""
+    content, repaired = restore_frontmatter(extract_markdown_content(reply), original)
+    return (decision, content, repaired,
+            check_optimized_content(content, original, target_path))
+
+
 def check_optimized_content(content: str, original: str, target_path: str = "") -> str:
     """检查整篇重写的结果是否可直接覆盖原文件，返回错误说明（空串表示通过）。"""
     content = (content or "").strip()
@@ -246,13 +275,9 @@ def make_optimize_extractor(original: str, target_path: str):
     """内容不合规时抛异常，让call_model_with_retry重试，并把原因带进最终报错。"""
     def _extractor(text: str) -> str:
         try:
-            decision = extract_json_block(text)
+            _, content, _, error = prepare_optimized_content(text, original, target_path)
         except (ValueError, json.JSONDecodeError) as e:
             raise ValueError(f"判定json解析失败: {e}")
-        if decision.get("action") == "no-change":
-            return text
-        content = extract_markdown_content(text)
-        error = check_optimized_content(content, original, target_path)
         if error:
             raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
         return text
@@ -291,7 +316,8 @@ def optimize_skill(args: tuple) -> dict:
         result["error"] = reply
         return result
     try:
-        decision = extract_json_block(reply)
+        decision, content, repaired, invalid = prepare_optimized_content(
+            reply, original, target)
     except (ValueError, json.JSONDecodeError) as e:
         result["error"] = f"错误：优化结果解析失败: {e}"
         return result
@@ -301,8 +327,10 @@ def optimize_skill(args: tuple) -> dict:
     result["change_summary"] = decision.get("change_summary", "")
     result["fixes"] = decision.get("fixes", [])
     if result["action"] != "no-change":
-        result["content"] = extract_markdown_content(reply)
-        result["invalid"] = check_optimized_content(result["content"], original, target)
+        result["content"] = content
+        result["invalid"] = invalid
+        if repaired:
+            result["repaired"] = "模型未输出frontmatter，已补回原skill的frontmatter"
     return result
 
 
@@ -373,6 +401,8 @@ def build_report(results: list, unresolved: list, unparsed: list,
                   f"- 匹配方式：{r.get('match', '')}",
                   f"- 判定理由：{r.get('reason', '')}",
                   f"- 改动概要：{r.get('change_summary', '')}"]
+        if r.get("repaired"):
+            lines.append(f"- 自动修复：{r['repaired']}")
         if r.get("fixes"):
             lines.append("- 逐条处置：")
             lines += format_fixes(r["fixes"])

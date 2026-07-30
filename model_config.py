@@ -12,7 +12,9 @@
 
 用法：
   python3 model_config.py            # 打印当前解析出的配置（密钥打码），自查用
+  python3 model_config.py --probe    # 再向每个模型发一个最小请求，确认链路真的通
 """
+import json
 import os
 import re
 import sys
@@ -121,7 +123,52 @@ def _mask(secret: str) -> str:
     return f"{secret[:7]}…{secret[-4:]}（{len(secret)}字符）"
 
 
-def main():
+def probe(cfg: dict, timeout: int = 120) -> str:
+    """发一个最小请求，确认这条链路能拿到可解析的JSON回复。
+
+    优化流水线一次调用要几分钟，失败后很难分辨是模型输出的问题还是这一层就没通。
+    这里用 max_tokens=16 的最小请求快速验证：鉴权对不对、响应体是不是JSON、
+    回复结构里能不能取到 content。
+    """
+    import requests
+
+    payload = {
+        "model": cfg["model"],
+        "messages": [{"role": "user", "content": "回复OK两个字"}],
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 16,
+    }
+    if not cfg["thinking"]:
+        payload["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
+    headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else None
+
+    try:
+        response = requests.post(cfg["api_url"], json=payload, headers=headers,
+                                 timeout=timeout, verify=False)
+    except requests.exceptions.RequestException as e:
+        return f"[FAIL] 请求发不出去: {type(e).__name__}: {e}"
+
+    body = (response.text or "").strip()
+    if response.status_code >= 400:
+        return f"[FAIL] HTTP {response.status_code}，正文开头: {body[:200]!r}"
+    try:
+        res_json = response.json()
+    except ValueError:
+        detail = "响应体为空" if not body else f"开头: {body[:200]!r}"
+        return (f"[FAIL] HTTP {response.status_code} 但响应体不是JSON"
+                f"（Content-Type={response.headers.get('Content-Type', '?')}，{detail}）")
+    try:
+        message = res_json["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return f"[FAIL] 回复结构里没有 choices[0].message: {json.dumps(res_json)[:200]}"
+    content = (message.get("content") or "").strip()
+    reasoning = message.get("reasoning_content")
+    note = f"，另有 reasoning_content {len(reasoning)}字符" if reasoning else ""
+    return f"[OK] HTTP {response.status_code}，content={content[:40]!r}{note}"
+
+
+def main(do_probe: bool = False):
     print("=" * 72)
     print(f"模型接入配置（.env: {'已读取' if os.path.isfile(ENV_PATH) else '不存在'}）")
     print("=" * 72)
@@ -136,9 +183,11 @@ def main():
         print(f"    密钥      : {_mask(cfg['api_key'])}")
         print(f"    max_tokens: {cfg['max_tokens']}")
         print(f"    思考      : {'开（不发关思考的字段）' if cfg['thinking'] else '关'}")
+        if do_probe:
+            print(f"    探测      : {probe(cfg)}")
     print(f"\nNO_PROXY: {os.environ.get('NO_PROXY', '（空）')}")
 
 
 if __name__ == "__main__":
-    main()
+    main(do_probe="--probe" in sys.argv[1:])
     sys.exit(0)
