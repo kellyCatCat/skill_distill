@@ -101,6 +101,19 @@ python3 validate_skills.py skills_distilled/07-27
 
 **产出**：skill 文件、`skill_tree_structure.txt`（树结构索引）、`conversion_report.json`（转换记录）。
 
+**源文档是 Excel 排障步骤表时**，先用 `excel_to_markdown.py` 转成 markdown 再蒸馏：
+
+```bash
+# 一个sheet转一篇markdown；--tree 直接摆成源树布局（一个二级目录=一篇skill）
+python3 excel_to_markdown.py 步骤表.xlsx result/新来源 --tree "故障处理：网络可靠性/BFD故障案例"
+```
+
+按**一行一小节**展开（不是转成markdown表格——回显动辄几十行，塞进表格单元格既读不了、
+模型也抓不住结构），命令行与回显进围栏代码块。同一步骤编号出现多次时自动标
+"（情形N）"。未识别的列不丢弃，原样输出为"其它信息"。正文里的外部链接会被列出来
+提醒——蒸馏的写作约束要求删掉链接，必要内容得先摘成文字。输入支持 `.xlsx`（需
+`pip install openpyxl`）和 `.csv/.tsv`（从 Excel 直接粘贴出来的形态，无需依赖）。
+
 **只重跑部分分组**：校验出 ERROR 时 `validate_skills.py` 会直接打印可复制的参数：
 
 ```bash
@@ -327,6 +340,7 @@ python3 validate_skills.py skills_distilled/07-27
 
 | 脚本 | 用途 |
 | --- | --- |
+| `excel_to_markdown.py` | Excel 排障步骤表 → 蒸馏用的 markdown 源文档 |
 | `skill_self_distill_pipeline.py` | 主蒸馏：源文档树 → skill 库 |
 | `skill_case_merge_pipeline.py` | 增量并入新故障案例 |
 | `skill_eval_optimize_pipeline.py` | 按评测结果优化 skill（加 `--check` 只验匹配） |

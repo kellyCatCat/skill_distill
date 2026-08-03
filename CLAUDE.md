@@ -11,6 +11,7 @@
 - `compare_models.py`：同一批评测跑多个模型并列比较，用于决定某条流水线该用哪个模型。按客观信号出对比表（是否被落盘前校验判失败、篇幅与小节保留率、fixes 条数、耗时），每个模型的报告分别写到 `reports/skill_optimize_report_<mm-dd>_<模型名>.md`；全程 DRY-RUN。数字之外仍需人工看 `fixes` 有没有点到评测真正暴露的那处判据。
 - `validate_skills.py`：校验生成的 skill 是否完整合规（frontmatter、截断、残留引用、禁用短语等），存在 ERROR 时退出码为 1。
 - `build_skill_tree.py`：按实际 skill 目录重新生成 `skill_tree_structure.txt`。这份树原是主蒸馏的副产物、且是按**源文档树的分组**写出来的，所以增量并入新建的 skill 不在里面，而刷新它本来得重跑整条蒸馏（要源文档树 + 几十次模型调用 + 覆盖全部 skill）。本脚本只扫目录、不调模型、只写这一个文件，跑完还会列出「蒸馏之后新增」和「报告里有但目录下没有」的 skill。渲染函数由主流水线共用，两边格式不会跑偏。加 `--dry-run` 只打印。**并入或新建 skill 之后记得跑一遍。**
+- `excel_to_markdown.py`：把 Excel 排障步骤表转成蒸馏用的 markdown 源文档（转出来的是**源文档不是 skill**，没有 frontmatter，还要过一遍主蒸馏）。一个 sheet 一篇 md，按**一行一小节**展开而不是转成 markdown 表格——回显动辄几十行，塞进表格单元格既读不了模型也抓不住结构；命令行与回显进围栏代码块（回显里 `#` 开头的配置视图提示符不包起来会被当成标题）。列名靠关键词模糊匹配，匹配**顺序不能乱**：`ragIndex` 那列含"命令行"、"修复建议影响性"那列含"修复建议"，排错顺序会串列。未识别的列不丢弃、原样输出为"其它信息"（步骤表各版本列不统一，静默丢列蒸馏完就看不出少了什么）。同一步骤编号出现多次时标"（情形N）"，避免一篇里出现多个同名小节。`--tree "一级/二级"` 直接摆成源树布局（一个二级目录 = 一篇 skill），`--skip-unsupported` 丢掉标"不支持"的行，`--stdout` 只打印。输入支持 `.xlsx`（需 openpyxl）与 `.csv/.tsv`（从 Excel 粘贴出来的形态，无依赖）。正文里的外部链接会打印出来提醒——蒸馏要求删链接，必要内容得先摘成文字。
 - `extract_display_commands.py`：从 skill 里抽取 `display xxx` 查询命令，按源文件一一对照输出 json（`skills_distilled/07-27/<一级>/<二级>.md` → `cmd_distilled/07-27/<一级>/<二级>.json`，内容为 list of string）。行内代码与围栏代码块都扫，按出现顺序去重。
 - `cases/`：新增故障案例的原始数据（入库）；`evals/`：排障评测结果（**不入库**，见 `.gitignore`）；`reports/`：变更说明，其中运行时生成的 `skill_change_report_*.md`、`skill_optimize_report_*.md` 不入库。
 
