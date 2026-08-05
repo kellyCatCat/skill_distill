@@ -11,9 +11,9 @@
        - 若接口状态为 `Down`，请检查线路连接及接口是否被 `shutdown`。
        - 若接口状态为 `Up` 但无流量，继续后续步骤。
 
-`excel_to_markdown.py --style branch` 用规则做同一件事，胜在一个字都不改；本脚本
-调模型，胜在能真正读懂"这句话其实是个判断分支"，代价是它会顺手改措辞。所以重点
-全在**把它能改动的范围钉死**。
+改写交给模型，因为判断分支散在句子里，靠规则只能搬动整行以"若/如果"开头的那几句；
+代价是模型必然会顺手改措辞，所以重点全在**把它能改动的范围钉死**——落盘前逐项校验，
+不合规就不写文件。想先看清送进模型的到底是什么，用 `--dump`。
 
 回显在**送模型之前就被删掉**：这套文档是拿去蒸馏成skill的，skill 里不留大段回显
 （主蒸馏的写作约束也是"不要照搬回显"）。删掉的好处不止是省token——模型看不到的
@@ -33,6 +33,7 @@
   python3 restyle_docs.py result/新来源 out/            # 指定输出目录
   python3 restyle_docs.py result/新来源 --diff          # 只看逐行差异
   python3 restyle_docs.py result/新来源 --apply         # 就地覆盖原文件
+  python3 restyle_docs.py result/新来源 --dump          # 只写送模型的中间产物，不调模型
   python3 restyle_docs.py 一篇.md --model MiniMax-M2.7 --workers 2
 """
 import difflib
@@ -88,7 +89,11 @@ PROMPT_TEMPLATE = """你在整理IPRAN网络排障的源文档，需要把下面
 - 不要输出frontmatter，不要输出任何解释性文字。
 
 # 待改写的文档
+下面 <document> 标签之间的内容是待改写的文档，标签本身不要输出：
+
 <document>
+{{DOCUMENT}}
+</document>
 
 # 输出格式
 只输出一个markdown代码块，内容为改写后的整篇文档：
@@ -220,7 +225,7 @@ def restyle_one(args: tuple) -> dict:
           f"送模型 {len(source)}字符）")
 
     reply = call_model_with_retry(
-        api_url, model_name, PROMPT_TEMPLATE.replace("<document>", source),
+        api_url, model_name, PROMPT_TEMPLATE.replace("{{DOCUMENT}}", source),
         extractor=make_extractor(source), max_tokens=max_tokens, timeout=timeout)
     if reply.startswith("错误："):
         return {"rel": rel, "path": path, "error": reply, "dropped": dropped}
@@ -252,15 +257,58 @@ def collect_markdown(source: str) -> list:
     return sorted(found)
 
 
+def dump_inputs(docs: list, out_dir: str) -> None:
+    """只做删回显这一步，把送模型的中间产物写出来，不调模型。
+
+    改写是模型干的，出了问题得先分清是"喂进去的东西不对"还是"模型改坏了"。
+    这里把删完回显的文档和拼好的完整prompt都落盘，可以先看清送进去的到底是什么，
+    也方便直接拿prompt去别处试。不调模型，所以没配 .env 也能跑。
+    """
+    print(f"--dump：只写送模型的中间产物到 {out_dir}，不调用模型\n")
+    for path, rel in docs:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            original = f.read()
+        stripped, dropped = strip_echo_blocks(original)
+        prompt = PROMPT_TEMPLATE.replace("{{DOCUMENT}}", stripped)
+
+        doc_path = os.path.join(out_dir, *rel.split("/"))
+        prompt_path = doc_path + ".prompt.txt"
+        os.makedirs(os.path.dirname(os.path.abspath(doc_path)), exist_ok=True)
+        with open(doc_path, "w", encoding="utf-8") as f:
+            f.write(stripped)
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        print(f"[DUMP] {rel}: 原文{len(original)}字符 → 删掉{dropped}段回显 → "
+              f"送模型{len(stripped)}字符（prompt共{len(prompt)}字符）")
+        print(f"       删完回显的文档: {doc_path}")
+        print(f"       完整prompt    : {prompt_path}")
+    print(f"\n共 {len(docs)} 篇。确认无误后去掉 --dump 再跑改写。")
+
+
 def main(source: str, out_dir: str, model_name: str, api_url: str, workers: int,
-         apply: bool, show_diff: bool, max_tokens=None, timeout: int = 600):
-    if show_diff:
-        apply = False                    # --diff 是审阅用的，永远不写文件
+         apply: bool, show_diff: bool, dump: bool = False,
+         max_tokens=None, timeout: int = 600):
+    if show_diff or dump:
+        apply = False                    # --diff / --dump 都不写原文件
     print("=" * 60)
     print("调用大模型改写排版（分支格式，删除回显）"
           + ("（只看diff，不写文件）" if show_diff else ""))
     print("=" * 60)
     print(f"输入: {source}")
+
+    if not os.path.exists(source):
+        print(f"错误: 输入不存在: {source}")
+        sys.exit(1)
+    docs = collect_markdown(source)
+    if not docs:
+        print("错误: 没有找到.md文件")
+        sys.exit(1)
+
+    if dump:
+        print(f"共 {len(docs)} 篇文档\n")
+        dump_inputs(docs, out_dir)
+        return
+
     # 先把模型配置解析出来：没配 .env 时在这里明确报错，而不是等并行池里抛栈
     try:
         cfg = resolve_model(model_name, api_url)
@@ -271,14 +319,6 @@ def main(source: str, out_dir: str, model_name: str, api_url: str, workers: int,
           f"（thinking {'开' if cfg['thinking'] else '关'}，"
           f"max_tokens {max_tokens or cfg['max_tokens']}）")
     print(f"输出: {'就地覆盖原文件' if apply else out_dir}")
-
-    if not os.path.exists(source):
-        print(f"错误: 输入不存在: {source}")
-        sys.exit(1)
-    docs = collect_markdown(source)
-    if not docs:
-        print("错误: 没有找到.md文件")
-        sys.exit(1)
     print(f"共 {len(docs)} 篇文档\n")
 
     task_args = [(path, rel, model_name, api_url, max_tokens, timeout)
@@ -321,7 +361,8 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     do_apply = "--apply" in argv
     do_diff = "--diff" in argv
-    argv = [a for a in argv if a not in ("--apply", "--diff")]
+    do_dump = "--dump" in argv
+    argv = [a for a in argv if a not in ("--apply", "--diff", "--dump")]
 
     def _option(flag: str, default: str = "") -> str:
         if flag not in argv:
@@ -344,4 +385,4 @@ if __name__ == "__main__":
                    else src.rstrip("/") + "_branch")
     main(src, argv[1] if len(argv) > 1 else default_out, model,
          # 地址与密钥按模型名从 .env 解析（见 model_config.py）
-         None, worker_count, do_apply, do_diff)
+         None, worker_count, do_apply, do_diff, do_dump)

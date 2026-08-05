@@ -128,7 +128,13 @@ python3 excel_to_markdown.py 步骤表.xlsx result/新来源 --tree "故障处�
 python3 restyle_docs.py result/新来源            # 结果写到 result/新来源_branch，原文件不动
 python3 restyle_docs.py result/新来源 --diff     # 只看逐行差异
 python3 restyle_docs.py result/新来源 --apply    # 就地覆盖
+python3 restyle_docs.py result/新来源 --dump     # 只写送模型的中间产物，不调模型
 ```
+
+改写 prompt 在 `restyle_docs.py` 的 `PROMPT_TEMPLATE`（文件开头附近）。想看清送进模型的
+到底是什么，用 `--dump`：它只做"删回显"这一步，把**删完回显的文档**和**拼好的完整
+prompt** 分别写到输出目录（`<文档>.md` 与 `<文档>.md.prompt.txt`），不调模型、也不需要
+配 `.env`。改写出了问题时先用它分清是"喂进去的东西不对"还是"模型改坏了"。
 
 ```markdown
 1. **检查接口物理及协议状态**
