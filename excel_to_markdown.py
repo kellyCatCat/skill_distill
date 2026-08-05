@@ -26,21 +26,6 @@
   python3 excel_to_markdown.py 步骤表.xlsx result/新来源 --tree "故障处理：网络可靠性/BFD故障案例"
   python3 excel_to_markdown.py 步骤表.xlsx --skip-unsupported   # 丢掉标"不支持"的行
   python3 excel_to_markdown.py 步骤表.xlsx --stdout             # 只打印不写文件
-  python3 excel_to_markdown.py 步骤表.xlsx --style branch       # 分支格式
-
---style 有两种排版，内容完全相同、只是层级不同：
-  section（默认）一步一个 `## 步骤N …` 小节，各列作为加粗小标题；
-  branch        一步一个有序列表项、判断分支作为子项，形如
-
-      1. **检查接口物理及协议状态**
-
-         在任意视图下执行 `display interface ...` 检查入接口是否收到数据报文。
-         - 若接口状态为 Down，请检查线路连接及接口是否被 shutdown。
-         - 若接口状态为 Up 但无流量，继续后续步骤。
-
-分支格式是**纯规则重排**：整行以"若/如果/当"开头的归为分支子项，以"1、"开头的
-归为子步骤，命令加反引号。不合并、不拆句、不改一个字——这件事一旦交给模型做，
-它必然顺手改写措辞，而这里的前提是保住原有的命令与描述。
 """
 import csv
 import os
@@ -93,17 +78,6 @@ HEADER_SEARCH_ROWS = 10
 
 LINK_PATTERN = re.compile(r"https?://\S+")
 FILENAME_UNSAFE = re.compile(r'[\\/:*?"<>|\r\n\t]')
-
-# --style branch 用：单元格里以"若/如果/当…"开头的一行是一个判断分支，
-# 以"1、""2."开头的一行是这一步内部的子步骤。只按**整行**判断，不去切句子里的
-# 分句——把一句话拆开就等于在改写描述了，而这里的前提是一个字都不改。
-BRANCH_LINE = re.compile(r"^(?:若|如果|当|假如|倘若|否则)")
-NUMBERED_LINE = re.compile(r"^(\d+)\s*[、.)．]\s*")
-
-# 命令加反引号用：命令是ASCII、周围正文是中文，所以一条 display 命令一定在第一个
-# 中文字符处结束。只认 display 开头的查询命令，配置命令由"命令行"列给出的原文匹配，
-# 不去猜正文里哪一段是命令。
-DISPLAY_IN_TEXT = re.compile(r"display[ \t][\x20-\x7E]*")
 
 
 def normalize_header(text: str) -> str:
@@ -264,136 +238,7 @@ def render_steps(steps: list, labels: list, heading: str) -> list:
     return lines
 
 
-def split_commands(cell: str) -> list:
-    """"命令行"单元格 → 命令列表，去掉"1、""2."这类行内编号。"""
-    commands = []
-    for line in (cell or "").split("\n"):
-        line = NUMBERED_LINE.sub("", line.strip()).strip()
-        if line:
-            commands.append(line)
-    return commands
-
-
-def wrap_commands(text: str, commands: list) -> str:
-    """给正文里的命令加上反引号，**只加标记不改字**。
-
-    两个来源：一是"命令行"列给出的原文（精确匹配，不猜）；二是正文里以 display
-    开头的查询命令——命令是ASCII、正文是中文，所以一定在第一个中文字符处结束。
-    单元格原文里本来就有反引号时整段跳过，避免套两层。
-    """
-    if not text or "`" in text:
-        return text
-
-    spans = []
-    for command in sorted(commands, key=len, reverse=True):
-        start = text.find(command)
-        while start != -1:
-            spans.append((start, start + len(command)))
-            start = text.find(command, start + len(command))
-    for match in DISPLAY_IN_TEXT.finditer(text):
-        end = match.end()
-        while end > match.start() and text[end - 1] in " \t,;.，":
-            end -= 1                      # 命令后面紧跟的空格和标点不算命令的一部分
-        spans.append((match.start(), end))
-
-    merged = []
-    for start, end in sorted(spans):
-        if merged and start < merged[-1][1]:
-            continue                      # 与已选片段重叠（长命令优先），丢掉短的
-        merged.append((start, end))
-
-    for start, end in reversed(merged):
-        marked = text[start:end].strip()
-        if marked:
-            text = f"{text[:start]}`{marked}`{text[end:]}"
-    return text
-
-
-def bullet_block(label: str, value: str, indent: str) -> list:
-    """把"标签：多行取值"渲染成一个列表项。
-
-    续行必须再缩进两格对齐到列表项的正文列（"- "占两格），否则单元格里的
-    "1、…\\n2、…"第二行会掉出列表项，变成同级的另一段。
-    """
-    first, *rest = value.split("\n")
-    lines = [f"{indent}- {label}：{first}".rstrip()]
-    lines += [f"{indent}  {line}".rstrip() for line in rest]
-    return lines
-
-
-def render_steps_branch(steps: list, labels: list) -> list:
-    """分支格式：一步一个有序列表项，判断分支作为子项。
-
-        1. **检查接口物理及协议状态**
-
-           在任意视图下执行 `display interface ...` 检查入接口是否收到数据报文。
-           - 若接口状态为 Down，请检查线路连接。
-
-    只做重排与加标记：单元格里的每一行原样搬过来，不合并、不拆句、不改措辞——
-    要求就是"不修改已有的命令、描述"，一旦交给模型改写就守不住这条。
-    """
-    lines = []
-    for step, label in zip(steps, labels):
-        # label 形如"步骤1 查看组件的CPU占用率（情形2）"，编号提出来当列表序号
-        no_and_title = label.split(" ", 1)
-        marker = f"{no_and_title[0].replace('步骤', '')}. "
-        indent = " " * len(marker)
-        title = no_and_title[1] if len(no_and_title) > 1 else label
-        lines += [f"{marker}**{title}**", ""]
-
-        commands = split_commands(step.get("cmd", ""))
-        detail = step.get("detail", "")
-        # 步骤描述是多行时，第一行已经在标题里，其余并进正文
-        rest_title = "\n".join((step.get("step_title") or "").split("\n")[1:]).strip()
-        if rest_title:
-            detail = f"{rest_title}\n{detail}" if detail else rest_title
-
-        used_in_body = []
-        for raw in detail.split("\n"):
-            line = raw.strip()
-            if not line:
-                continue
-            used_in_body.append(line)
-            marked = wrap_commands(line, commands)
-            numbered = NUMBERED_LINE.match(line)
-            if numbered:
-                # "1、xxx" → 有序子项，编号保留，只把顿号换成markdown的点
-                body = wrap_commands(NUMBERED_LINE.sub("", line), commands)
-                lines.append(f"{indent}{numbered.group(1)}. {body}")
-            elif BRANCH_LINE.match(line):
-                lines.append(f"{indent}- {marked}")
-            else:
-                lines.append(f"{indent}{marked}")
-        lines.append("")
-
-        body_text = "\n".join(used_in_body)
-        # 正文里没出现过的命令单独列出来，否则"命令行"列的内容就丢了
-        missing = [c for c in commands if c not in body_text]
-        if missing:
-            lines.append(f"{indent}- 命令：" + "、".join(f"`{c}`" for c in missing))
-
-        purpose = step.get("cmd_purpose", "")
-        if purpose and purpose.strip() != title.split("（")[0].strip():
-            lines += bullet_block("命令用途", purpose, indent)
-        for field, field_label in (("fix", "修复建议"), ("impact", "影响性"),
-                                   ("verify", "修复验证"), ("version", "版本支持")):
-            value = step.get(field, "")
-            if value:
-                lines += bullet_block(field_label, value, indent)
-        for name, value in step.get("_other", ()):
-            lines += bullet_block(name, value, indent)
-
-        output = step.get("output", "")
-        if output:
-            fence = fence_for(output)
-            lines += ["", f"{indent}回显示例：", ""]
-            lines += [f"{indent}{line}".rstrip()
-                      for line in f"{fence}\n{output}\n{fence}".split("\n")]
-        lines.append("")
-    return lines
-
-
-def render_document(title: str, scenarios: list, style: str = "section") -> str:
+def render_document(title: str, scenarios: list) -> str:
     """整篇markdown。
 
     一张表里有多个故障场景时，每个场景一个 `## 场景N：…` 小节、步骤降为 `###`，
@@ -401,21 +246,17 @@ def render_document(title: str, scenarios: list, style: str = "section") -> str:
     同一层，蒸馏时两个场景就混成一条排查链了。只有一个无名场景时退回原来的
     "整篇一串步骤"形态。
     """
-    branch = style == "branch"
     lines = [f"# {title}", ""]
     named = [s for s in scenarios if s["title"]]
 
     if not named:
         steps = [step for s in scenarios for step in s["steps"]]
         labels = step_labels(steps)
-        if branch:
-            lines += ["## 排障步骤", ""] + render_steps_branch(steps, labels)
-        else:
-            if len(steps) > 1:
-                lines += ["## 排障步骤总览", ""]
-                lines += [f"{seq}. {label}" for seq, label in enumerate(labels, 1)]
-                lines.append("")
-            lines += render_steps(steps, labels, "##")
+        if len(steps) > 1:
+            lines += ["## 排障步骤总览", ""]
+            lines += [f"{seq}. {label}" for seq, label in enumerate(labels, 1)]
+            lines.append("")
+        lines += render_steps(steps, labels, "##")
         return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"
 
     all_labels = [step_labels(s["steps"]) for s in scenarios]
@@ -434,8 +275,7 @@ def render_document(title: str, scenarios: list, style: str = "section") -> str:
             lines += ["**排障目标**", "", scenario["goal"], ""]
         if scenario["topology"]:
             lines += ["**组网场景**", "", scenario["topology"], ""]
-        lines += (render_steps_branch(scenario["steps"], labels) if branch
-                  else render_steps(scenario["steps"], labels, "###"))
+        lines += render_steps(scenario["steps"], labels, "###")
 
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"
 
@@ -471,8 +311,7 @@ def safe_filename(name: str) -> str:
     return FILENAME_UNSAFE.sub("_", name).strip() or "sheet"
 
 
-def convert_sheet(name: str, rows: list, title: str, skip_unsupported: bool,
-                  style: str = "section") -> tuple:
+def convert_sheet(name: str, rows: list, title: str, skip_unsupported: bool) -> tuple:
     """返回 (markdown文本, 统计信息)。"""
     scenarios, extras, header_idx = parse_rows(rows)
 
@@ -499,7 +338,7 @@ def convert_sheet(name: str, rows: list, title: str, skip_unsupported: bool,
                for scenario in scenarios for step in scenario["steps"]
                if not step.get("fix") and step.get("impact")]
 
-    text = render_document(title or name, scenarios, style)
+    text = render_document(title or name, scenarios)
     links = sorted(set(LINK_PATTERN.findall(text)))
     return text, {"steps": step_count, "header_row": header_idx + 1,
                   "scenarios": [s["title"] for s in scenarios if s["title"]],
@@ -508,8 +347,7 @@ def convert_sheet(name: str, rows: list, title: str, skip_unsupported: bool,
 
 
 def main(source: str, out_dir: str, sheet_filter: str, title: str,
-         tree: str, skip_unsupported: bool, to_stdout: bool,
-         style: str = "section"):
+         tree: str, skip_unsupported: bool, to_stdout: bool):
     print("=" * 60)
     print("Excel排障步骤表 → markdown源文档")
     print("=" * 60)
@@ -541,7 +379,7 @@ def main(source: str, out_dir: str, sheet_filter: str, title: str,
     for name, rows in sheets.items():
         try:
             text, stats = convert_sheet(name, rows, title if len(sheets) == 1 else "",
-                                        skip_unsupported, style)
+                                        skip_unsupported)
         except ValueError as e:
             print(f"[FAIL] 工作表 {name!r}: {e}")
             failed += 1
@@ -606,15 +444,11 @@ if __name__ == "__main__":
     sheet_filter = _get_option(argv, "--sheet")
     doc_title = _get_option(argv, "--title")
     tree_path = _get_option(argv, "--tree")
-    doc_style = _get_option(argv, "--style") or "section"
 
-    if doc_style not in ("section", "branch"):
-        print(f"错误: --style 只支持 section / branch，收到 {doc_style!r}")
-        sys.exit(1)
     if not argv:
         print(__doc__)
         sys.exit(1)
     default_out = os.path.join(
         "docs_from_excel", os.path.splitext(os.path.basename(argv[0]))[0])
     main(argv[0], argv[1] if len(argv) > 1 else default_out,
-         sheet_filter, doc_title, tree_path, skip_unsupported, to_stdout, doc_style)
+         sheet_filter, doc_title, tree_path, skip_unsupported, to_stdout)
