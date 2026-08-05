@@ -3,6 +3,7 @@ __pycache__/
 result/
 skills_distilled/
 cmd_distilled/
+docs_from_excel/
 reports/skill_change_report_*.md
 reports/skill_optimize_report_*.md
 evals/
