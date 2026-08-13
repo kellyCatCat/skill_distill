@@ -296,17 +296,41 @@ def format_scenario(scenario: dict) -> str:
     if scenario["topology"]:
         lines.append(f"\n## 组网场景\n{scenario['topology']}")
 
+    # 清单按**命令本身**去重，不按 ragIndex：表里 ragIndex 可能重号（同一个号
+    # 指向两条不同的命令），按号去重会让后一条被静默丢掉，清单于是和步骤里写的
+    # 命令对不上——模型拿到自相矛盾的映射，多半会给那一步写错命令。
     commands = {}
     for step in scenario["steps"]:
-        if step["rag_no"] is not None and step["command"]:
-            commands.setdefault(step["rag_no"], step)
+        if not step["command"]:
+            continue
+        entry = commands.setdefault(step["command"], {
+            "indexes": [], "purpose": step["rag_purpose"], "echo": step["echo"],
+            "first_row": step["row"]})
+        if step["rag_no"] is not None and step["rag_no"] not in entry["indexes"]:
+            entry["indexes"].append(step["rag_no"])
+        if not entry["echo"] and step["echo"]:
+            entry["echo"] = step["echo"]
+
+    # 一个号指向多条命令时，明确告诉模型别按号认命令，按步骤自己写的命令行认
+    by_index = {}
+    for command, entry in commands.items():
+        for index in entry["indexes"]:
+            by_index.setdefault(index, []).append(command)
+    ambiguous = sorted(i for i, cmds in by_index.items() if len(cmds) > 1)
+
     if commands:
-        block = ["\n## 命令清单（同一编号的命令只执行一次，多个步骤可共用它的回显）"]
-        for index, step in sorted(commands.items()):
-            block.append(f"\n### 命令{index}：{step['rag_purpose']}\n"
-                         f"命令行：{step['command']}")
-            if step["echo"]:
-                block.append(f"回显：\n```\n{step['echo']}\n```")
+        block = ["\n## 命令清单（同一条命令只执行一次，多个步骤共用它的回显）"]
+        if ambiguous:
+            block.append(
+                f"注意：编号 {'、'.join(str(i) for i in ambiguous)} 在本表里被用在了"
+                f"多条不同的命令上。步骤正文里出现的“N号命令”因此不可靠，"
+                f"请一律以该步骤自己列出的“使用命令”那一行为准。")
+        for command, entry in sorted(commands.items(),
+                                     key=lambda kv: kv[1]["first_row"]):
+            label = "、".join(f"{i}号" for i in entry["indexes"]) or "未编号"
+            block.append(f"\n### {label}：{entry['purpose']}\n命令行：{command}")
+            if entry["echo"]:
+                block.append(f"回显：\n```\n{entry['echo']}\n```")
         lines.append("\n".join(block))
 
     lines.append("\n## 排障步骤")
