@@ -125,21 +125,22 @@ CASES = [
     ("围栏未闭合", GOOD + "\n```bash\ndisplay xxx\n", "围栏未闭合"),
 ]
 
-failures = 0
-for name, content, expect in CASES:
-    got = check_skill_format(content, scenario)
-    if expect == "":
-        ok = got == ""
-    else:
-        ok = expect in got
-    if not ok:
-        failures += 1
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name}")
-    if got:
-        print(f"        → {got}")
-    if not ok:
-        print(f"        期望包含: {expect!r}")
+def run() -> int:
+    failures = 0
+    for name, content, expect in CASES:
+        got = check_skill_format(content, scenario)
+        ok = (got == "") if expect == "" else (expect in got)
+        if not ok:
+            failures += 1
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+        if got:
+            print(f"        → {got}")
+        if not ok:
+            print(f"        期望包含: {expect!r}")
+    print(f"\n{len(CASES) - failures}/{len(CASES)} 通过")
+    return failures
 
-print(f"\n{len(CASES) - failures}/{len(CASES)} 通过")
-sys.exit(1 if failures else 0)
+
+# GOOD 同时被 mock 跑用作假的模型回复，所以这个模块要能被 import 而不自己跑起来
+if __name__ == "__main__":
+    sys.exit(1 if run() else 0)
