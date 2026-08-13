@@ -439,6 +439,40 @@ def check_skill_format(content: str, scenario: dict) -> str:
     return ""
 
 
+FRONTMATTER_KEY = re.compile(r"^(name|description)\s*:\s*\S")
+
+
+def restore_frontmatter(content: str) -> tuple:
+    """把模型漏掉的 frontmatter 分隔线补回去，返回 (内容, 是否补过)。
+
+    qwen 常把 `---` 丢掉、只留下开头的 name/description 两行（评测优化流水线上
+    也踩过，见 skill_eval_optimize_pipeline.restore_frontmatter）。这不是内容
+    有问题，为一对分隔线判失败、重跑一整轮改写太贵，所以直接补。
+
+    只认开头连续的 name/description 行：遇到空行或正文就停，不会把正文里恰好
+    形如 `xxx: yyy` 的句子卷进 frontmatter。
+    """
+    content = (content or "").strip()
+    if not content or content.startswith("---"):
+        return content, False
+    lines = content.splitlines()
+    head = []
+    for line in lines:
+        if FRONTMATTER_KEY.match(line):
+            head.append(line)
+            continue
+        break
+    if not any(line.startswith("name") for line in head):
+        return content, False
+    rest = "\n".join(lines[len(head):]).lstrip("\n")
+    return "---\n" + "\n".join(head) + "\n---\n\n" + rest, True
+
+
+def prepare_content(reply: str) -> tuple:
+    """从回复里取出skill正文，返回 (内容, 是否补过frontmatter)。"""
+    return restore_frontmatter(extract_markdown_content(reply))
+
+
 def make_extractor(scenario: dict):
     """内容不合规时抛异常让 call_model_with_retry 重试，并把原因带进最终报错。"""
     def _extractor(text: str) -> str:
@@ -446,7 +480,7 @@ def make_extractor(scenario: dict):
             extract_json_block(text)
         except (ValueError, json.JSONDecodeError) as e:
             raise ValueError(f"改写说明的json解析失败: {e}")
-        content = extract_markdown_content(text)
+        content, _ = prepare_content(text)
         error = check_skill_format(content, scenario)
         if error:
             raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
@@ -476,11 +510,13 @@ def convert_scenario(args: tuple) -> dict:
     except (ValueError, json.JSONDecodeError) as e:
         result["error"] = f"错误：改写说明解析失败: {e}"
         return result
-    content = extract_markdown_content(reply)
+    content, repaired = prepare_content(reply)
     result["content"] = content
     result["invalid"] = check_skill_format(content, scenario)
     result["branches_expanded"] = decision.get("branches_expanded", "")
     result["commands_normalized"] = decision.get("commands_normalized", [])
+    if repaired:
+        result["repaired"] = "模型没输出frontmatter的---分隔线，已补回"
     return result
 
 
@@ -516,6 +552,8 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
         lines += ["", f"## 新建skill：`{r['skill_path']}`", "",
                   f"- 来源场景：{r['scenario']}（步骤表第{r['rows'][0]}-{r['rows'][1]}行）",
                   f"- 分支拆解：{r.get('branches_expanded', '')}"]
+        if r.get("repaired"):
+            lines.append(f"- 自动修复：{r['repaired']}")
         if r.get("commands_normalized"):
             pairs = "；".join(
                 f"{c.get('from', '')} → {c.get('to', '')}"
@@ -609,7 +647,44 @@ def main(XLSX_PATH, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
         sys.exit(1)
 
 
+def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
+    """对已有的skill文件单独跑一遍格式校验，不调模型。
+
+    校验器平时只在流水线内部对模型回复生效；落盘之后想再验一遍（比如手工改过
+    正文、或想确认某篇老skill合不合新规范）就需要这个入口。
+    命令是否齐全要对着步骤表比，所以仍要读表。
+    """
+    scenarios = parse_sheet(xlsx_path, sheet_name)
+    by_path = {derive_skill_path(s): s for s in scenarios}
+    failures = 0
+    for path in paths:
+        content = open(path, 'r', encoding='utf-8', errors='replace').read()
+        # 按文件名找对应场景；只有一个场景时直接用它
+        key = next((k for k in by_path if os.path.basename(k) == os.path.basename(path)),
+                   None)
+        scenario = by_path[key] if key else (scenarios[0] if len(scenarios) == 1 else None)
+        if scenario is None:
+            print(f"[SKIP] {path}: 在步骤表里找不到同名场景，无法核对命令是否齐全")
+            continue
+        error = check_skill_format(content, scenario)
+        if error:
+            failures += 1
+            print(f"[FAIL] {path}\n       {error}")
+        else:
+            print(f"[OK]   {path}（对照场景「{scenario['name']}」）")
+    print(f"\n共 {len(paths)} 个文件，失败 {failures} 个")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
+    # --validate <文件…>：单独校验已有的skill文件，不调模型
+    if "--validate" in sys.argv[1:]:
+        targets = [a for a in sys.argv[1:] if a != "--validate" and not a.startswith("-")]
+        if not targets:
+            print("用法: python3 excel_skill_distill_pipeline.py --validate <skill.md> [更多文件…]")
+            sys.exit(2)
+        sys.exit(validate_files(targets, "excel_cases/排障步骤表.xlsx"))
+
     main(
         XLSX_PATH="excel_cases/排障步骤表.xlsx",
         OUTPUT_DIR=f"skills_from_excel/{datetime.now().strftime('%m-%d')}",
