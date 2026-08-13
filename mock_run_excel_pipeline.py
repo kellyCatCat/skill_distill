@@ -87,12 +87,18 @@ def install_mock(reply: str, sse: bool):
     distill.requests.post = fake_post
 
 
-def run(label: str, reply: str, sse: bool, workdir: str) -> tuple:
-    """跑一轮，返回 (退出码, 报告路径)。"""
+def run(label: str, reply: str, sse: bool, workdir: str,
+        model: str = "qwen3.6-27b") -> tuple:
+    """跑一轮，返回 (退出码, 报告路径)。
+
+    model 决定 payload 走哪条分支：不开思考的模型会多发一个关思考的
+    chat_template_kwargs，开思考的不发。两条都要覆盖，否则换默认模型时
+    另一条分支就没人测了。
+    """
     install_mock(reply, sse)
     report_path = os.path.join(workdir, "report.md")
     print("\n" + "#" * 72)
-    print(f"# {label}（{'SSE流' if sse else '普通JSON'}）")
+    print(f"# {label}（{'SSE流' if sse else '普通JSON'}，{model}）")
     print("#" * 72)
     code = 0
     try:
@@ -100,7 +106,7 @@ def run(label: str, reply: str, sse: bool, workdir: str) -> tuple:
             XLSX_PATH=XLSX_PATH,
             OUTPUT_DIR=os.path.join(workdir, "skills"),
             API_URL=MOCK_URL,
-            MODEL_NAME="MiniMax-M2.7",
+            MODEL_NAME=model,
             WORKERS=2,
             REPORT_PATH=report_path,
             DRY_RUN=True,
@@ -130,8 +136,10 @@ def main(which: str):
             if code != 0:
                 failures.append("A 合规回复应当成功，实际退出码非0")
         if which in ("all", "sse"):
+            # SSE 是 MiniMax 那个部署的形态，所以这条特意用它——顺带覆盖
+            # thinking=True 时不发 chat_template_kwargs 的那条分支
             code, report = run("B. 合规回复 / SSE流", GOOD_REPLY, True,
-                               os.path.join(workdir, "b"))
+                               os.path.join(workdir, "b"), model="MiniMax-M2.7")
             bodies["sse"] = skill_body(report)
             if code != 0:
                 failures.append("B SSE流应当成功，实际退出码非0")

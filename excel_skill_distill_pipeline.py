@@ -615,9 +615,12 @@ if __name__ == "__main__":
         OUTPUT_DIR=f"skills_from_excel/{datetime.now().strftime('%m-%d')}",
         # 地址与密钥从 .env 按模型名解析（见 model_config.py）
         API_URL=None,
-        # 改写要拆分支、统一参数、还要顾及跨步骤的命令复用，比主蒸馏吃推理，
-        # 与评测优化同档，先用 MiniMax-M2.7；跑过几轮后可用 compare_models.py 复核。
-        MODEL_NAME="MiniMax-M2.7",
+        # 改写要拆分支、统一参数、还要顾及跨步骤的命令复用。这个任务是"照着已有判据
+        # 重写"而不是"从散文里提炼判据"，未必吃推理，所以用调用量大、重跑便宜的
+        # qwen3.6-27b；跑过几轮后可用 compare_models.py 和 MiniMax-M2.7 对比复核。
+        # 注意换模型也换了输出预算：qwen 那档是 16384，MiniMax 是 32768，
+        # 场景步骤多时若撞上 finish_reason=length，用下面的 MAX_TOKENS 单独调大。
+        MODEL_NAME="qwen3.6-27b",
         WORKERS=3,
         REPORT_PATH=f"reports/excel_skill_report_{datetime.now().strftime('%m-%d')}.md",
         SHEET_NAME=None,
