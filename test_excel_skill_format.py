@@ -121,6 +121,26 @@ CASES = [
     ("没有加粗编号步骤",
      re.sub(r"^(\d+)\. \*\*(.+?)\*\*", r"### \2", GOOD, flags=re.M),
      "不符合输出格式要求"),
+    # 修复CLI里抄了样例回显的具体值：qwen 实测抄出过 `bgp 100`、
+    # `undo segment-list list1`，换一台设备就是错的，甚至会误建/误删对象
+    ("修复CLI写死了AS号",
+     GOOD + "\n#### 方案X\n- CLI序列：\n  ```\n  system-view\n  bgp 100\n  ```\n",
+     "写成了具体值"),
+    ("修复CLI写死了segment-list名",
+     GOOD + "\n#### 方案X\n- CLI序列：\n  ```\n  undo segment-list list1\n  ```\n",
+     "写成了具体值"),
+    ("修复CLI用参数则放行",
+     GOOD + "\n#### 方案X\n- CLI序列：\n  ```\n  system-view\n  bgp <as-number>\n"
+            "  undo segment-list <segment-list-name>\n  ```\n",
+     ""),
+    ("子关键字不误判",
+     GOOD + "\n#### 方案X\n- CLI序列：\n  ```\n  bgp route-learning acceleration enable\n  ```\n",
+     ""),
+    # 表里没给命令的修复方向（如"减少policy数量"）不许编出命令来
+    # 是"多写了一条表里没有的"，不是"替换掉已有的"——后者会先撞上命令缺失检查
+    ("编造了表里没有的查询命令",
+     GOOD + "\n- 验证：执行 `display srv6-te policy summary` 确认数量。\n",
+     "在步骤表中不存在"),
     ("缺frontmatter", GOOD.split("---\n", 2)[2], "缺少frontmatter"),
     ("围栏未闭合", GOOD + "\n```bash\ndisplay xxx\n", "围栏未闭合"),
 ]

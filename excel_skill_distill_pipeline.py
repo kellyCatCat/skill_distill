@@ -72,7 +72,9 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 回显不要整段照搬，但**判据依赖的字段名必须原样保留并用反引号标出**（如 `Policy State`、`List State`、`Verification State`、`BFD State`），agent 要靠这些字段名在回显里定位。字段的取值同样照写（如 `Down (Shutdown)`、`Down (Overrun)`、`SID Unreachable`）。
 - 表里"修复建议影响性"列的内容（如影响大需要仿真验证）写进该修复方案的影响性说明，**不要写成排查步骤**——仿真是交给人的风险提示，agent 执行不了。
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
-- 只写表里给出的信息。表没给的 HTTP 方法、参数、命令一律不要自己编。"""
+- 只写表里给出的信息。表没给的 HTTP 方法、参数、命令一律不要自己编。表里只写了"减少policy数量"这种没有具体命令的修复方向时，就照实写方向，**不要编出一条 CLI 来**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。
+- **修复CLI里禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成 `<as-number>`、`<policy-name>`、`<segment-list-name>` 这样的参数。回显只用来说明"该看哪个字段"，不是配置模板。
+- 每个判定出根因的分支，都要指明该用哪个修复方案（如"按方案二修复"），方案号必须与"修复方案输出要求"里列出的一致；表里没给修复手段的根因，写明"仅能定位，无自动修复手段"。"""
 
 
 # 输出格式是这次改写的重点，单独成段写进 prompt。
@@ -363,11 +365,85 @@ BAD_PLACEHOLDER = re.compile(r"\{[^}\n]+\}|\[[a-z][^\]\n]*\]|\bXXX+\b")
 TABLE_REFERENCE = re.compile(r"\d+\s*号命令(行)?|执行\s*\d+\s*号")
 
 
+FENCE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+QUERY_PREFIX = re.compile(r"^(display|tracert|ping)\b")
+
+# 这些关键字后面跟的是随设备而变的对象名/编号，必须写成 <参数>。
+# qwen 会把样例回显里的具体值抄进修复CLI（实测抄出过 `bgp 100`、
+# `undo segment-list list1`）——在别的设备上执行要么失败，要么误建/误删对象。
+DEVICE_OPERAND = re.compile(
+    r"^(?:undo\s+)?(bgp|segment-list|interface|peer|router-id|ospf|isis)\s+(\S+)")
+POLICY_OPERAND = re.compile(r"^(?:undo\s+)?(srv6-te\s+policy|sr-te\s+policy)\s+(\S+)")
+# 带数字的操作数才当成"具体实例"：`bgp route-learning` 这种子关键字不算，
+# 而 policy1 / list1 / 100 / GigabitEthernet0/1/0 都带数字
+LOOKS_LIKE_INSTANCE = re.compile(r"^[\w./:-]*\d[\w./:-]*$")
+
+
 def inline_commands(markdown: str) -> list:
     """正文里被反引号包起来、看着像设备命令的片段。"""
     return [span for span in INLINE_CODE.findall(markdown)
             if re.match(r"^(display|ping|tracert|undo|system-view|commit|"
                         r"segment-routing|bgp|interface)\b", span.strip())]
+
+
+def cli_lines(markdown: str) -> list:
+    """所有像命令的行：修复方案的CLI在围栏代码块里，查询命令在行内代码里。"""
+    lines = []
+    for block in FENCE_BLOCK.findall(markdown):
+        lines += [ln.strip() for ln in block.splitlines() if ln.strip()]
+    lines += [span.strip() for span in INLINE_CODE.findall(markdown)]
+    return lines
+
+
+def _normalize_command(text: str) -> str:
+    """去掉参数与多余空白，用于比对两条命令是不是同一条。"""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>\n]*>", "", text)).strip().lower()
+
+
+def known_commands(scenario: dict) -> set:
+    """步骤表里出现过的查询命令（命令行列 + 修复建议列 + 修复验证列）。"""
+    known = set()
+    for step in scenario["steps"]:
+        for field in ("command", "fix", "verify"):
+            for match in re.finditer(r"(?:display|tracert|ping)[^\n，。；]*",
+                                     step.get(field) or ""):
+                normalized = _normalize_command(match.group(0))
+                if normalized:
+                    known.add(normalized)
+    return known
+
+
+def check_hardcoded_operands(content: str) -> str:
+    """修复CLI里不许出现从样例回显抄来的具体对象名/编号。"""
+    for raw in cli_lines(content):
+        if QUERY_PREFIX.match(raw):
+            continue   # 查询命令的过滤串（如 | include SPEC_RES_xxx）是固定字面量
+        match = POLICY_OPERAND.match(raw) or DEVICE_OPERAND.match(raw)
+        if not match:
+            continue
+        keyword, operand = match.groups()
+        if operand.startswith("<"):
+            continue
+        if not LOOKS_LIKE_INSTANCE.match(operand):
+            continue   # 跟的是子关键字（如 bgp route-learning），不是实例名
+        return (f"修复CLI里 `{raw}` 的 {keyword} 操作数写成了具体值 {operand!r}——"
+                f"这类取值随设备而变（多半是从样例回显里抄的），必须写成 <参数>")
+    return ""
+
+
+def check_unknown_commands(content: str, scenario: dict) -> str:
+    """不许编造步骤表里没有的查询命令。"""
+    known = known_commands(scenario)
+    for raw in cli_lines(content):
+        if not QUERY_PREFIX.match(raw):
+            continue
+        normalized = _normalize_command(raw)
+        if not normalized or any(normalized == k or normalized in k or k in normalized
+                                 for k in known):
+            continue
+        return (f"正文里的 `{raw}` 在步骤表中不存在——表没给的命令不要自己编，"
+                f"没有可用命令时写到根因判定为止")
+    return ""
 
 
 def check_skill_format(content: str, scenario: dict) -> str:
@@ -425,6 +501,13 @@ def check_skill_format(content: str, scenario: dict) -> str:
         if len(variants) > 1:
             return (f"同一个参数在正文里有多种写法: {'、'.join(sorted(variants))}，"
                     f"全篇必须统一")
+
+    error = check_hardcoded_operands(content)
+    if error:
+        return error
+    error = check_unknown_commands(content, scenario)
+    if error:
+        return error
 
     # "继续执行步骤N"必须指向真实存在的步骤
     step_numbers = set()
