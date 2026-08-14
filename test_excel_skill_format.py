@@ -3,7 +3,7 @@
 """验证 excel_skill_distill_pipeline.check_skill_format。
 
 这个校验器是输出格式约束的唯一执行者——四个小节齐不齐、命令用没用反引号、参数是不是
-统一的 `<>`、修复CLI有没有抄样例回显里的具体值、根因对照表有没有漏掉排查步骤里的根因。
+统一的 `<>`、修复CLI有没有抄样例回显里的具体值、根因对照表有没有漏掉步骤表写明的根因。
 它挡的是模型的输出，而蒸馏用的模型接口只在内网可达，在没有内网的机器上跑不了整条
 流水线，就没有别的东西能验证它了。所以这里用手写样例覆盖：一份合规的要放过，每类
 违规要各自被拦下且报错说得清。
@@ -29,11 +29,13 @@ def variant(old, new, count=1):
     return GOOD.replace(old, new, count)
 
 
+PRECHECK_CMD = "`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`"
+
 CASES = [
     ("合规样例", GOOD, ""),
 
     # ---- 命令与参数 ----
-    # 这条命令在步骤6和根因对照表里各出现一次，只去掉一处的反引号不够
+    # 这条命令在步骤5和根因对照表里各出现一次，只去掉一处的反引号不够
     ("命令没用反引号包裹",
      variant("`display srv6-te policy source-sid`", "display srv6-te policy source-sid",
              count=99),
@@ -43,25 +45,25 @@ CASES = [
              "`display bfd session srv6-segment-list {segment-list-id}`"),
      "不是尖括号形式"),
     ("同一参数两种写法",
-     variant("`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`",
+     variant(PRECHECK_CMD,
              "`display srv6-te policy endpoint <endpoint-ipv6> color <colorid>`"),
      "多种写法"),
     ("残留表内编号说法",
-     variant("- **CLI命令**：`display srv6-te policy source-sid`",
-             "- **CLI命令**：执行6号命令行"),
+     variant("- **CLI命令**：`display current-configuration configuration bgp`",
+             "- **CLI命令**：执行3号命令行"),
      "表内编号说法"),
-    ("漏写了一条命令（前两词与别条相同）",
-     variant("`display paf | include SPEC_RES_SRV6POLICY_SEGLIST_GLOBAL_NUM`",
-             "`display paf | include SPEC_RES_SRV6POLICY_MAX_NUM`"),
+    ("漏写了一条命令（前缀与别条相同）",
+     variant("SPEC_RES_SRV6POLICY_SEGLIST_GLOBAL_NUM", "SPEC_RES_SRV6POLICY_MAX_NUM",
+             count=99),
      "没有以行内代码"),
     ("编造了表里没有的查询命令",
      GOOD + "\n- 补充验证：执行 `display srv6-te policy summary` 确认数量。\n",
      "在步骤表中不存在"),
 
     # ---- 修复CLI里抄了样例回显的具体值 ----
-    ("修复CLI写死了AS号", variant("bgp <as-number>", "bgp 100"), "写成了具体值"),
+    ("修复CLI写死了AS号", variant("`bgp <as-number>`", "`bgp 100`"), "写成了具体值"),
     ("修复CLI写死了segment-list名",
-     variant(" segment-list <segment-list-name>", " segment-list list1"),
+     variant("` segment-list <segment-list-name>`", "` segment-list list1`"),
      "写成了具体值"),
     ("子关键字不误判",
      GOOD + "\n```\nbgp route-learning acceleration enable\n```\n", ""),
@@ -69,27 +71,28 @@ CASES = [
     # ---- 四个小节的结构 ----
     ("缺少根因对照表", GOOD[:GOOD.index("## 根因对照表")], "缺少必需的小节"),
     ("前置检查里有内部跳转",
-     variant("- **执行完毕后**：进入前置检查 2。",
-             "- **执行完毕后**：若异常则跳转步骤 3，否则进入前置检查 2。"),
+     variant("- **跳转信息**：执行完成后进入排查步骤 1",
+             "- **跳转信息**：若配置异常 → 跳转步骤 3，否则进入排查步骤 1"),
      "前置检查必须是线性执行"),
     ("前置检查用了非必填参数",
-     variant("`display current-configuration configuration bgp`",
-             "`display current-configuration configuration bgp <segment-list-id>`"),
+     variant(PRECHECK_CMD,
+             "`display srv6-te policy endpoint <endpoint-ipv6> color <color-id> "
+             "segment-list <segment-list-id>`"),
      "不可以超出入参列表"),
 
-    # ---- 根因三处必须对得上 ----
+    # ---- 根因：步骤表写明的根因、正文、对照表三者要对得上 ----
     ("根因对照表漏了一个根因",
-     variant("| srlist超限 | srlist `List State` 为 `Down (Overrun)`，数量达规格上限 "
-             "| 无直接修复 CLI；减少冗余 Segment List，或升级设备规格 |\n", ""),
+     variant("| srlist 超限 | srlist 的 `List State` 为 `Down (Overrun)`", "| xx | yy"),
      "根因对照表漏了"),
-    ("根因名被改写（与表里不一致）",
-     variant("srlist超限", "段列表超限", count=99),
-     "没有出现在排查步骤中"),
+    ("根因只在对照表里、正文没判到",
+     variant('- **根因定位**：`List State` 为 `Down (Overrun)` → "srlist 超限"',
+             "- **根因定位**：无"),
+     "正文里没有判到"),
     ("排查步骤没有步骤标题",
-     re.sub(r"^### 步骤 (\d+)：(.+)$", r"- 第\1项：\2", GOOD, flags=re.M),
+     re.sub(r"^### (\d+)\. ", r"#### 第\1项 ", GOOD, flags=re.M),
      "没有找到形如"),
     ("跳转指向不存在的步骤",
-     variant("跳转步骤 2。", "跳转步骤 99。"),
+     variant("跳转步骤 2", "跳转步骤 99"),
      "不存在的步骤"),
 
     # ---- 整体完整性 ----

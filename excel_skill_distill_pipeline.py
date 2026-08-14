@@ -74,7 +74,7 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
 - 只写表里给出的信息。表没给的 HTTP 方法、参数、命令一律不要自己编。表里只写了"减少policy数量"这种没有具体命令的修复方向时，就照实写方向，**不要编出一条 CLI 来**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。
 - **修复CLI里禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成 `<as-number>`、`<policy-name>`、`<segment-list-name>` 这样的参数。回显只用来说明"该看哪个字段"，不是配置模板。
-- 每个判定出根因的分支，都要指明该用哪个修复方案（如"按方案二修复"），方案号必须与"修复方案输出要求"里列出的一致；表里没给修复手段的根因，写明"仅能定位，无自动修复手段"。"""
+- 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
 
 
 # 输出格式是这次改写的重点，单独成段写进 prompt。
@@ -105,65 +105,72 @@ FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固�
 
 # 二、前置检查
 
-线性的信息采集：把诊断需要的命令按序执行一遍，采集回显字段，**不做分支判断**。写法：
+把诊断需要的命令按序执行一遍、采集回显字段。写法与排查步骤相同，用 `### N. 名称` 作标题，并多一项「需记录字段」说明哪些回显要留给后面的步骤复用：
 
 ```
 ## 前置检查
 
-前置检查为线性执行的信息采集，不做分支判断，全部执行完毕后进入排查步骤。
-
-### 前置检查 1：采集SRv6 TE Policy运行状态
+### 1. 采集 SRv6 TE Policy 运行状态
 
 - **CLI命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
-- **采集字段**：
-  - `Policy State`（关注取值：`Up` / `Down (Shutdown)` / `Down (Overrun)`）
-  - srlist 的 `List State`、`BFD State`、`Verification State`
-- **执行完毕后**：进入前置检查 2。
+- **跳转信息**：
+  - 回显中不存在对应 endpoint/color 的 Policy → 根因定位为"SRv6 TE Policy 不存在"，结束排查
+  - `Policy State` 为 `Up` 且 `List State` 为 `Up` → 隧道状态正常，结束排查
+  - 其余情况 → 继续前置检查步骤 2
+- **根因定位**：SRv6 TE Policy 不存在
+- **需记录字段**（后续步骤复用）：`Policy State`、srlist 部分的 `List State`、`BFD State`、`Verification State`
 ```
 
 两条硬要求：
-1. **CLI之间必须是线性执行关系，不可以有内部跳转**——前置检查里不许出现"转步骤N""跳转步骤N"。
-2. **前置检查用到的CLI参数不可以超出入参列表中的必填项**（标「是」的那些）。回显里才能拿到的参数不能出现在前置检查的命令里。
+1. **CLI之间必须是线性执行关系，不可以有内部跳转**——只能"继续前置检查步骤 N+1"或直接结束排查，不许出现"跳转步骤 N"往回跳或跳着走。
+2. **前置检查用到的CLI参数不可以超出入参列表中的必填项**（标「是」的那些）。只能从回显里拿到的参数（如 `<segment-list-id>`）不能出现在前置检查的命令里。
 
 # 三、排查步骤
 
-按序执行；任一步已定位并修复且复检通过后，后续步骤停止。每步用 `### 步骤 N：名称` 作标题，编号从1开始连续，并写全下面四类信息：
+按序执行；任一步已定位并修复且复检通过后，后续步骤停止。每步用 `### N. 名称` 作标题，编号从1开始连续，并写全下面三类信息：
 
 ```
-### 步骤 4：检查SRv6 TE Policy是否被shutdown
+### 3. 检查 SRv6 TE Policy 是否被 shutdown
 
-- **CLI命令**：无（基于前置检查 1 回显的 `Policy State` 字段判定）
-- **跳转信息**：
-  - 若 `Policy State` 不为 `Down (Shutdown)` → 跳转步骤 5。
-- **根因定位**：
-  - `Policy State` 为 `Down (Shutdown)` → 根因：**SRv6 TE Policy被shutdown**
-    - 修复：
-      ```
-      srv6-te policy <policy-name> endpoint <endpoint-ipv6> color <color-id>
-       undo shutdown
-      ```
-    - 复检命令：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（标准：`Policy State` 为 `Up`，告警清除）→ 结束。
+- **CLI命令**：复用前置检查步骤 1 回显的 `Policy State` 字段
+- **跳转信息**：`Policy State` 不为 `Down (Shutdown)` → 跳转步骤 4
+- **根因定位**：`Policy State` 为 `Down (Shutdown)` → "SRv6 TE Policy 被 shutdown"
+```
+
+需要额外下发命令时这样写：
+
+```
+### 4. 检查 BFD 检测状态
+
+- **CLI命令**：
+  1. 复用前置检查步骤 1 回显 srlist 部分的 `BFD State` 字段
+  2. 若 `BFD State` 为 `Down`，执行 `display bfd session srv6-segment-list <segment-list-id>`
+- **跳转信息**：`BFD State` 不为 `Down` → 跳转步骤 5
+- **根因定位**：`BFD State` 为 `Down` → "BFD 检测 Down"
 ```
 
 写法要求：
-- **CLI命令**：接口名用全称（写 `GigabitEthernet0/1/0`，不写 `GE0/1/0`），变量用 `<>` 包裹，命令用反引号包成行内代码。该步骤不执行新命令时写"无（基于前置检查 N 回显的 X 字段判定）"。
-- **跳转信息**：依据回显的哪个字段、什么取值，跳到哪一步或结束。判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在。
-- **根因定位**：根因一律写成 `根因：**名称**`（冒号 + 加粗），后面跟「修复」，可选跟「复检命令」并写明通过标准。表里没给修复手段的根因，「修复」写"无直接修复CLI"并说明只能定位，不要编命令。
-- **终止**：最后写一个 `### 终止` 小节。流程走完但证据不足以判定时不得臆造根因，要返回：故障对象、采集时间、已执行检查项、关键回显的实际取值。
+- **CLI命令**：接口名用全称（写 `GigabitEthernet0/1/0`，不写 `GE0/1/0`），变量用 `<>` 包裹，命令用反引号包成行内代码。判据来自前置检查已采集的回显时，写"复用前置检查步骤 N 回显的 X 字段"，**不要重复下发同一条命令**。
+- **跳转信息**：依据回显的哪个字段、什么取值，跳到哪一步或结束。判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在。最后一步要写清全部判据都不命中时的去向（判定"未找到根因"并输出已执行的检查项）。
+- **根因定位**：写清依据回显的什么条件推出哪个根因，根因名称用引号标出。**这里只给根因名称，不要写修复动作和复检命令**——它们统一放在根因对照表里，避免同一份修复在两处各写一遍、改了一处忘另一处。
 
 # 四、根因对照表
 
-三列表格，**必须包含排查步骤里出现过的每一个根因**，一个不能漏：
+四列表格，**必须包含排查步骤里出现过的每一个根因**，一个不能漏。修复和复检都写在这里：
 
 ```
 ## 根因对照表
 
-| 根因 | 现象 | 修复CLI和方法 |
-| --- | --- | --- |
-| SRv6 TE Policy被shutdown | `Policy State` 为 `Down (Shutdown)` | 在该Policy视图下执行 `undo shutdown` |
+| 根因 | 现象 | 修复CLI和方法 | 复检命令（可选） |
+| --- | --- | --- | --- |
+| SRv6 TE Policy被shutdown | `Policy State` 为 `Down (Shutdown)` | 在该Policy视图下执行 `undo shutdown` | `display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（标准：`Policy State` 为 `Up`） |
 ```
 
-「根因」列的文字要和排查步骤里 `根因：**…**` 中的名称**逐字一致**，否则对不上。证据不足那种情况也要有一行（根因写"未找到根因"）。
+- 「现象」写判定这个根因所依据的字段与取值。
+- 「修复CLI和方法」写具体的CLI或操作；表里没给修复手段的根因，写"无直接修复CLI"并说明只能定位，不要编命令。影响性大的修复在这一列注明影响与建议的操作时机。
+- 「复检命令（可选）」写修复后用什么命令确认、通过标准是什么；表里没给复检手段时留 `-`。
+
+「根因」列的文字要和排查步骤「根因定位」里写的名称**逐字一致**，否则对不上。
 
 # 本场景的根因清单（必须逐字使用）
 
@@ -171,9 +178,9 @@ FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固�
 
 <root_causes>
 
-**这些名称要原样使用**，不要改写、简化或另起名字（`{endpoint/color}` 这类占位可以去掉或替换成实际参数）。排查步骤里的 `根因：**…**` 和根因对照表的「根因」列都用它们，两处必须一致。清单之外不要自己发明根因；清单里的每一条都必须在排查步骤中出现。
+**这些名称要原样使用**，不要改写、简化或另起名字（`{endpoint/color}` 这类占位可以去掉或替换成实际参数）。排查步骤的「根因定位」和根因对照表的「根因」列都用它们，两处必须一致。清单之外不要自己发明根因；清单里的每一条都必须有对应的排查步骤把它判出来。
 
-清单里标了「无故障分支」的那条（如"……状态正常"）**同样要当作一条根因写全**：在对应步骤里写成 `根因：**……状态正常**`，并在根因对照表里占一行——「现象」写判定它的字段与取值，「修复CLI和方法」写"无需修复"。agent 排到这一支时也需要有对照可依，漏掉它会让 agent 以为自己少判了一步。
+清单里标了「无故障分支」的那条（如"……状态正常"）**也要在流程里有明确落点**：写清依据哪些字段取值判定为正常、然后结束排查，并在根因对照表里占一行（「修复CLI和方法」写"无需修复"）。agent 排到这一支时需要有对照可依，漏掉它会让 agent 以为自己少判了一步。
 
 # 分支必须逐条展开（改写的核心）
 
@@ -207,8 +214,8 @@ PROMPT_TEMPLATE = """你是IPRAN网络运维专家，需要把一份排障步骤
 
 # 内容要求
 <writing_rules>
-- 输出完整的skill，以frontmatter开头，正文以一级标题"# "开始。frontmatter 的 name 用英文小写+连字符；description 写「故障现象 + 适用时机」，例如"SRv6 TE Policy Down（隧道中断）。出现 SRv6 隧道不通 / SR-Policy 状态异常等告警时使用，覆盖配置缺失、BFD Down、规格超限等场景。"
-- 排查步骤的顺序与编号跟随输入表格，不要重排。
+- 输出完整的skill，以frontmatter开头，frontmatter 之后直接写 `## 入参列表`，不要一级标题。frontmatter 的 name 用英文小写+连字符；description 写「故障现象 + 适用时机」，例如"SRv6 TE Policy Down（隧道中断）。出现 SRv6 隧道不通 / SR-Policy 状态异常等告警时使用，覆盖配置缺失、BFD Down、规格超限等场景。"
+- 步骤表里靠同一条命令的回显区分的多个根因，把那条命令放进前置检查采集一次，各步骤复用它的回显——不要每步重复下发。据此重新编排步骤是允许的，但判据本身要忠实于表格。
 - 表里"修复建议影响性"列的内容写进对应根因的「修复」里作为影响性提示；"修复验证"列的内容写成该根因的「复检命令」。
 
 # 输出格式
@@ -492,12 +499,12 @@ def build_format_spec(scenario: dict) -> str:
 
 REQUIRED_SECTIONS = ["入参列表", "前置检查", "排查步骤", "根因对照表"]
 
-# 排查步骤的标题：### 步骤 4：检查xxx
-STEP_HEADING = re.compile(r"^#{2,4}\s*步骤\s*(\d+)\s*[：:]\s*(.+)$", re.MULTILINE)
-# 根因标记：根因：**名称**
-ROOT_CAUSE_MARK = re.compile(r"根因\s*[：:]\s*\*\*([^*\n]+)\*\*")
-# 跳转引用：跳转步骤 5 / 转步骤5
-STEP_REFERENCE = re.compile(r"(?:跳转|转)\s*步骤\s*(\d+)")
+# 步骤标题：`### 1. 判定静态配置完整性`，也认 `### 步骤 1：xxx` 这种写法。
+# 前置检查用的是同样的编号形式，靠按 `## ` 小节切分来区分，不靠标题本身。
+STEP_HEADING = re.compile(
+    r"^#{2,4}\s*(?:步骤\s*)?(\d+)\s*[.、：:]\s*(.+)$", re.MULTILINE)
+# 跳转引用：跳转步骤 5 / 转步骤5 / 进入排查步骤 1
+STEP_REFERENCE = re.compile(r"(?:跳转|转入?|进入)\s*(?:排查)?步骤\s*(\d+)")
 
 
 def split_sections(content: str) -> dict:
@@ -543,10 +550,17 @@ def check_structure(content: str) -> str:
     return ""
 
 
+# 前置检查里的真跳转。只认"跳转步骤N"：
+#   - "跳转信息"是字段名，跳转后面不跟步骤号，不算；
+#   - "继续前置检查步骤2"是线性推进到下一条，是允许的；
+#   - "进入排查步骤1"是从前置检查走进排查步骤，也是允许的。
+PRECHECK_JUMP = re.compile(r"跳转\s*(?:到\s*)?步骤\s*(\d+)")
+
+
 def check_precheck_linear(content: str) -> str:
     """前置检查里不许有内部跳转。"""
     section = split_sections(content).get("前置检查", "")
-    hit = STEP_REFERENCE.search(section)
+    hit = PRECHECK_JUMP.search(section)
     if hit:
         return (f"前置检查里出现了跳转“{hit.group(0)}”——前置检查必须是线性执行的"
                 f"信息采集，分支判断放到排查步骤里")
@@ -591,31 +605,40 @@ def check_declared_params(content: str) -> str:
 
 
 def check_root_causes(content: str, scenario: dict) -> str:
-    """根因三处必须对得上：表里抽出的清单、排查步骤、根因对照表。"""
-    sections = split_sections(content)
-    in_steps = {_normalize_cause(c): c
-                for c in ROOT_CAUSE_MARK.findall(sections.get("排查步骤", ""))}
-    if not in_steps:
-        return ("排查步骤里没有找到 `根因：**名称**` 形式的根因标记，"
-                "根因必须用这个写法才能和根因对照表对上")
+    """根因对照表要覆盖步骤表里写明的每一个根因，正文里也得真的判到。
 
+    以**根因对照表**为准，而不是去正文里找某种固定标记：正文里根因的写法本来就
+    多样（`根因定位：X`、`→ "X"`、`根因：**X**`），锁死一种写法只会逼模型反复重试。
+    对照表是结构化的，从它取根因可靠得多。
+    """
+    sections = split_sections(content)
     in_table = {_normalize_cause(c): c
                 for c in table_first_column(sections.get("根因对照表", ""))}
     if not in_table:
-        return "根因对照表里没有解析到任何行，需要是三列表格（根因/现象/修复CLI和方法）"
+        return ("根因对照表里没有解析到任何行，需要是四列表格"
+                "（根因/现象/修复CLI和方法/复检命令）")
 
-    missing = [name for key, name in in_steps.items() if key not in in_table]
-    if missing:
-        return (f"根因对照表漏了排查步骤里出现的根因: {'、'.join(missing)}"
+    body = sections.get("前置检查", "") + "\n" + sections.get("排查步骤", "")
+    body_key = _normalize_cause(body)
+
+    faults = [c for c in extract_root_causes(scenario) if not c["normal"]]
+    absent_from_table = [c["text"] for c in faults
+                         if _normalize_cause(c["text"]) not in in_table]
+    if absent_from_table:
+        return (f"根因对照表漏了步骤表里写明的根因: {'、'.join(absent_from_table)}"
                 f"——对照表必须覆盖每一个根因")
 
-    # 表里明确写出的根因，一个都不能漏掉不写
-    expected = {_normalize_cause(c["text"]): c["text"]
-                for c in extract_root_causes(scenario)}
-    absent = [text for key, text in expected.items() if key not in in_steps]
-    if absent:
-        return (f"步骤表里明确写出的根因没有出现在排查步骤中: {'、'.join(absent)}"
-                f"——这些名称要原样使用，不要改写或省略")
+    absent_from_body = [c["text"] for c in faults
+                        if _normalize_cause(c["text"]) not in body_key]
+    if absent_from_body:
+        return (f"这些根因只在对照表里有、正文里没有判到: {'、'.join(absent_from_body)}"
+                f"——每个根因都要有对应的排查步骤把它判出来")
+
+    # 无故障分支（"……状态正常"）要有落点，否则agent排到这一支会以为自己漏判了。
+    # 措辞不强求和步骤表逐字一致（正文里常写成"隧道状态正常"），只要判到了即可。
+    if any(c["normal"] for c in extract_root_causes(scenario)) and "正常" not in body:
+        return ("正文里没有无故障分支的判定（步骤表写明了“……状态正常”这一支）"
+                "——排到这一支时agent需要有明确结论，否则会以为自己漏判了")
     return ""
 
 
@@ -658,7 +681,12 @@ def cli_lines(markdown: str) -> list:
 
 
 def _normalize_command(text: str) -> str:
-    """去掉参数与多余空白，用于比对两条命令是不是同一条。"""
+    """去掉参数与多余空白，用于比对两条命令是不是同一条。
+
+    还要去掉反斜杠：markdown 表格里的管道符必须转义成 `\\|`，不还原的话
+    `display paf \\| include XXX` 会和表里的原命令对不上，被误判成编造的命令。
+    """
+    text = text.replace("\\", "")
     return re.sub(r"\s+", " ", re.sub(r"<[^>\n]*>", "", text)).strip().lower()
 
 
@@ -715,8 +743,8 @@ def check_skill_format(content: str, scenario: dict) -> str:
         return "没有生成内容"
     if not re.match(r"^---\s*\n", content):
         return "缺少frontmatter"
-    if not re.search(r"^# \S", content, re.MULTILINE):
-        return "缺少一级标题（# xxx）"
+    # 不要求一级标题：新格式里 frontmatter 之后直接就是 `## 入参列表`，
+    # 篇名已经由 frontmatter 的 name/description 承担了
     if len(re.findall(r"^\s*```", content, re.MULTILINE)) % 2 != 0:
         return "代码块围栏未闭合，疑似输出被截断"
 
