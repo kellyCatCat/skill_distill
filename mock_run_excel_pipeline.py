@@ -154,7 +154,7 @@ def main(which: str):
         if "json" in bodies and "sse" in bodies:
             if bodies["json"] != bodies["sse"]:
                 failures.append("SSE拼回的正文与普通JSON路径不一致")
-            elif "检查隧道状态" not in bodies["sse"]:
+            elif "根因对照表" not in bodies["sse"]:
                 failures.append("SSE路径的中文疑似乱码")
 
         print("\n" + "=" * 72)

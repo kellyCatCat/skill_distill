@@ -78,19 +78,102 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 
 
 # 输出格式是这次改写的重点，单独成段写进 prompt。
-FORMAT_SPEC = """## 步骤的写法
+FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固定、缺一不可：
 
-每个排障步骤是一个有序列表项，标题加粗；步骤下面用无序列表写动作，动作下面再嵌一层写分支：
+`## 入参列表` → `## 前置检查` → `## 排查步骤` → `## 根因对照表`
+
+整体思路：**前置检查负责把命令跑完、把回显采集齐；排查步骤只对这些回显做判定**。所以同一条命令只在前置检查里执行一次，后面各步骤引用它的回显即可，不要在每个步骤里重复执行同一条命令。
+
+# 一、入参列表
+
+三列表格，列出执行本篇排查所需的入参：
 
 ```
-2. **检查基础连通性与路由可达性**
-   - 执行 `ping -a <source-ip> -s <packetsize> <peer-ip>` 检测本端到对端IP的连通性。
-     - 若Ping不通，检查本端IP路由表 `display ip routing-table <peer-ip> verbose`，确认是否存在到对端IP的路由。若无路由或路由下一跳不可达，需先解决底层IGP或静态路由问题。
-     - 若Ping通，说明底层链路及路由正常，继续执行步骤3。
-   - 对于L3VPN场景，还需确认PE间隧道状态及VRF间路由可达性。
+## 入参列表
+
+| 信息 | 是否必填 | 说明 |
+| --- | --- | --- |
+| 网元ID | 是 | 网元的resId，用于确定CLI下发的目标设备 |
+| endpoint IPv6 | 是 | 告警中SRv6 TE Policy的endpoint地址 |
+| color ID | 是 | 告警中SRv6 TE Policy的color值 |
+| segment-list ID | 否 | 由前置检查的回显中获取，无需用户提供 |
 ```
 
-## 分支必须逐条展开（本次改写的核心）
+- 「信息」列写参数的可读名称，去掉空格和连字符后要能和CLI里的参数名对上（`<endpoint-ipv6>` 对应「endpoint IPv6」，`<color-id>` 对应「color ID」）。
+- 用户提供不了、只能从回显里读出来的参数（如 `<segment-list-id>`），「是否必填」写「否」并在说明里注明来自哪一步的回显。
+- 本场景的命令已经用到下列参数，入参列表必须覆盖它们：<derived_params>
+
+# 二、前置检查
+
+线性的信息采集：把诊断需要的命令按序执行一遍，采集回显字段，**不做分支判断**。写法：
+
+```
+## 前置检查
+
+前置检查为线性执行的信息采集，不做分支判断，全部执行完毕后进入排查步骤。
+
+### 前置检查 1：采集SRv6 TE Policy运行状态
+
+- **CLI命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
+- **采集字段**：
+  - `Policy State`（关注取值：`Up` / `Down (Shutdown)` / `Down (Overrun)`）
+  - srlist 的 `List State`、`BFD State`、`Verification State`
+- **执行完毕后**：进入前置检查 2。
+```
+
+两条硬要求：
+1. **CLI之间必须是线性执行关系，不可以有内部跳转**——前置检查里不许出现"转步骤N""跳转步骤N"。
+2. **前置检查用到的CLI参数不可以超出入参列表中的必填项**（标「是」的那些）。回显里才能拿到的参数不能出现在前置检查的命令里。
+
+# 三、排查步骤
+
+按序执行；任一步已定位并修复且复检通过后，后续步骤停止。每步用 `### 步骤 N：名称` 作标题，编号从1开始连续，并写全下面四类信息：
+
+```
+### 步骤 4：检查SRv6 TE Policy是否被shutdown
+
+- **CLI命令**：无（基于前置检查 1 回显的 `Policy State` 字段判定）
+- **跳转信息**：
+  - 若 `Policy State` 不为 `Down (Shutdown)` → 跳转步骤 5。
+- **根因定位**：
+  - `Policy State` 为 `Down (Shutdown)` → 根因：**SRv6 TE Policy被shutdown**
+    - 修复：
+      ```
+      srv6-te policy <policy-name> endpoint <endpoint-ipv6> color <color-id>
+       undo shutdown
+      ```
+    - 复检命令：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（标准：`Policy State` 为 `Up`，告警清除）→ 结束。
+```
+
+写法要求：
+- **CLI命令**：接口名用全称（写 `GigabitEthernet0/1/0`，不写 `GE0/1/0`），变量用 `<>` 包裹，命令用反引号包成行内代码。该步骤不执行新命令时写"无（基于前置检查 N 回显的 X 字段判定）"。
+- **跳转信息**：依据回显的哪个字段、什么取值，跳到哪一步或结束。判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在。
+- **根因定位**：根因一律写成 `根因：**名称**`（冒号 + 加粗），后面跟「修复」，可选跟「复检命令」并写明通过标准。表里没给修复手段的根因，「修复」写"无直接修复CLI"并说明只能定位，不要编命令。
+- **终止**：最后写一个 `### 终止` 小节。流程走完但证据不足以判定时不得臆造根因，要返回：故障对象、采集时间、已执行检查项、关键回显的实际取值。
+
+# 四、根因对照表
+
+三列表格，**必须包含排查步骤里出现过的每一个根因**，一个不能漏：
+
+```
+## 根因对照表
+
+| 根因 | 现象 | 修复CLI和方法 |
+| --- | --- | --- |
+| SRv6 TE Policy被shutdown | `Policy State` 为 `Down (Shutdown)` | 在该Policy视图下执行 `undo shutdown` |
+```
+
+「根因」列的文字要和排查步骤里 `根因：**…**` 中的名称**逐字一致**，否则对不上。证据不足那种情况也要有一行（根因写"未找到根因"）。
+
+# 本场景的根因清单（必须逐字使用）
+
+输入表格的"步骤详细描述"里已经用 提示/返回"xxx" 的形式写明了每一步的判定结论，本场景的根因就是下面这些：
+
+<root_causes>
+
+**这些名称要原样使用**，不要改写、简化或另起名字（`{endpoint/color}` 这类占位可以去掉或替换成实际参数）。排查步骤里的 `根因：**…**` 和根因对照表的「根因」列都用它们，两处必须一致。清单之外不要自己发明根因；清单里的每一条都必须在排查步骤中出现。
+
+# 分支必须逐条展开（改写的核心）
 
 输入表格的"步骤详细描述"习惯把多个分支塞进一长句，例如：
 
@@ -98,30 +181,16 @@ FORMAT_SPEC = """## 步骤的写法
     如果不是Up，则继续向下执行；如果是Up，则判断List State是否为Up，如果不是，则继续向下执行；
     如果都是Up，则返回"状态正常"并结束执行。
 
-这种写法agent容易漏分支，必须拆成逐条：
+这种写法agent容易漏分支，必须按上面的格式拆开：每个分支单独一行、写清判据字段与取值、写清去向（跳转步骤N / 结束排查）。不要写"继续向下执行"这种没有具体去向的说法。
 
-```
-1. **检查隧道状态**
-   - 执行 `display srv6-te policy endpoint <endpoint-ipv6> color <color-id>` 查询指定 endpoint/color 的 SRv6 TE Policy。
-     - 若该 SRv6 TE Policy 不存在，判定根因为"SRv6 TE Policy 不存在"，结束排查。
-     - 若 `Policy State` 不为 `Up`，继续执行步骤2。
-     - 若 `Policy State` 为 `Up` 但 `List State` 不为 `Up`，继续执行步骤2。
-     - 若 `Policy State` 与 `List State` 均为 `Up`，判定隧道状态正常，结束排查。
-```
+# 命令行的格式约束
 
-拆分要求：
-- 每个分支单独一行，以"若"开头；
-- 写清**判据**（哪个字段、什么取值），字段名与取值都用反引号标出；
-- 写清**去向**：要么"结束排查"并给出判定结论，要么"继续执行步骤N"；不要写"继续向下执行"这种没有具体去向的说法；
-- "继续执行步骤N"里的 N 必须是本篇真实存在的步骤号。
-
-## 命令行的格式约束
-
-- 命令一律用反引号包成行内代码：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`。
-- 命令里的可变参数一律用尖括号 `<>`，不要用 `{}`、`[]`、`XXX` 或大写占位符。
-- 参数名用小写英文，多个单词之间用连字符分隔：`<endpoint-ipv6>`、`<color-id>`、`<segment-list-id>`。输入表里参数写法不统一（`<endpointipv6>`、`<colorid>` 连在一起），按这条规则统一改写。
-- **同一个参数在整篇 skill 里必须用同一个名字**。
-- 不要保留输入表里的"1号命令行"、"执行4号命令"这类编号说法，直接写出命令本身。"""
+- 命令一律用反引号包成行内代码；多行配置序列用围栏代码块。
+- 可变参数一律用尖括号 `<>`，不要用 `{}`、`[]`、`XXX` 或大写占位符。
+- 参数名用小写英文，多个单词用连字符分隔：`<endpoint-ipv6>`、`<color-id>`、`<segment-list-id>`。输入表里参数写法不统一（`<endpointipv6>`、`<colorid>` 连在一起），按这条规则统一改写。
+- **同一个参数在整篇skill里必须用同一个名字**。
+- 不要保留输入表里的"1号命令行"、"执行4号命令"这类编号说法，直接写出命令本身。
+"""
 
 
 PROMPT_TEMPLATE = """你是IPRAN网络运维专家，需要把一份排障步骤表改写成供网管agent使用的skill。
@@ -136,10 +205,9 @@ PROMPT_TEMPLATE = """你是IPRAN网络运维专家，需要把一份排障步骤
 
 # 内容要求
 <writing_rules>
-- 输出完整的skill，以frontmatter开头（name为英文小写+连字符，description为一句话简介），正文以一级标题"# "开始。
-- 步骤顺序与编号跟随输入表格，不要重排。
-- 每篇skill结尾要有"## 诊断结论输出要求"小节：规定agent排查完必须输出「故障对象」（具体到网元名、隧道名/接口名/会话名）、「根因类型」（列出本篇覆盖的取值）、「原因」（一句自然语言且必须含故障对象）、「修复建议」；未定位到根因时必须明确输出"未找到根因"并列出已执行的检查项。
-- 表里给出了修复动作的，还要有"## 修复方案输出要求"小节：按方案逐条输出「方案序号」「方案说明」「修复对象名」「CLI序列」；CLI同样遵守上面的命令格式约束。修复建议影响性大的，在方案里注明影响性与需要的可靠性保障；有修复验证的，写明验证命令与期望状态。
+- 输出完整的skill，以frontmatter开头，正文以一级标题"# "开始。frontmatter 的 name 用英文小写+连字符；description 写「故障现象 + 适用时机」，例如"SRv6 TE Policy Down（隧道中断）。出现 SRv6 隧道不通 / SR-Policy 状态异常等告警时使用，覆盖配置缺失、BFD Down、规格超限等场景。"
+- 排查步骤的顺序与编号跟随输入表格，不要重排。
+- 表里"修复建议影响性"列的内容写进对应根因的「修复」里作为影响性提示；"修复验证"列的内容写成该根因的「复检命令」。
 
 # 输出格式
 先输出一个json代码块给出改写说明，再输出一个markdown代码块给出skill全文：
@@ -275,6 +343,45 @@ def audit_step_numbers(scenario: dict) -> list:
     return issues
 
 
+# 表里"步骤详细描述"用 提示/返回"xxx" 的形式明确写出了每一步的判定结论，
+# 根因名称就在里面。抽出来当权威清单交给模型，比让它自己起名字可靠得多——
+# 名字一旦被改写，根因对照表就和排查步骤对不上了。
+CONCLUSION_PATTERN = re.compile(
+    r"(?:返回|提示)(?:错误信息)?\s*[“\"]([^”\"]+)[”\"]")
+
+
+def _normalize_cause(text: str) -> str:
+    """比对根因名用：去掉 {endpoint/color} 这类占位、空白，并转小写。"""
+    return re.sub(r"\s+", "", re.sub(r"[{（(][^}）)]*[}）)]", "", text or "")).lower()
+
+
+def extract_root_causes(scenario: dict) -> list:
+    """从步骤详细描述里抽出根因名称（排除"状态正常"这类健康结论）。"""
+    causes = []
+    seen = set()
+    for step in scenario["steps"]:
+        for text in CONCLUSION_PATTERN.findall(step["detail"] or ""):
+            if "正常" in text:
+                continue          # 健康结论，不是根因
+            key = _normalize_cause(text)
+            if key and key not in seen:
+                seen.add(key)
+                causes.append({"step": step["no"], "text": text.strip()})
+    return causes
+
+
+def collect_parameters(scenario: dict) -> list:
+    """表里命令用到的全部 <参数>，按出现顺序去重。"""
+    params, seen = [], set()
+    for step in scenario["steps"]:
+        for field in ("command", "fix", "verify"):
+            for param in re.findall(r"<([^>\n]+)>", step.get(field) or ""):
+                if param not in seen:
+                    seen.add(param)
+                    params.append(param)
+    return params
+
+
 def derive_skill_path(scenario: dict, category: str = DEFAULT_CATEGORY) -> str:
     """从告警名推出 skill 相对路径。
 
@@ -356,7 +463,154 @@ def format_scenario(scenario: dict) -> str:
     return "\n".join(lines)
 
 
+def build_format_spec(scenario: dict) -> str:
+    """把本场景抽出来的参数与根因填进格式规范。
+
+    这两样都能从表里确定性地拿到，交给模型自己想只会想歪：参数名会写混，
+    根因名会被改写成同义词，改写完根因对照表就和排查步骤对不上了。
+    """
+    params = collect_parameters(scenario)
+    causes = extract_root_causes(scenario)
+    return (FORMAT_SPEC
+            .replace("<derived_params>",
+                     "、".join(f"`<{p}>`" for p in params) or "（表里的命令没有参数）")
+            .replace("<root_causes>",
+                     "\n".join(f"{i}. {c['text']}（来自步骤{c['step']}）"
+                               for i, c in enumerate(causes, 1))
+                     or "（表里没有明确写出判定结论，按步骤描述自行归纳）"))
+
+
 # ---------------------------------------------------------------- 输出校验
+
+REQUIRED_SECTIONS = ["入参列表", "前置检查", "排查步骤", "根因对照表"]
+
+# 排查步骤的标题：### 步骤 4：检查xxx
+STEP_HEADING = re.compile(r"^#{2,4}\s*步骤\s*(\d+)\s*[：:]\s*(.+)$", re.MULTILINE)
+# 根因标记：根因：**名称**
+ROOT_CAUSE_MARK = re.compile(r"根因\s*[：:]\s*\*\*([^*\n]+)\*\*")
+# 跳转引用：跳转步骤 5 / 转步骤5
+STEP_REFERENCE = re.compile(r"(?:跳转|转)\s*步骤\s*(\d+)")
+
+
+def split_sections(content: str) -> dict:
+    """按 `## 小节名` 切分正文，返回 {小节名: 正文}。"""
+    sections, current, buf = {}, None, []
+    for line in content.splitlines():
+        match = re.match(r"^##\s+(.+?)\s*$", line)
+        if match:
+            if current:
+                sections[current] = "\n".join(buf)
+            current, buf = match.group(1).strip(), []
+        elif current:
+            buf.append(line)
+    if current:
+        sections[current] = "\n".join(buf)
+    return sections
+
+
+def table_first_column(section: str) -> list:
+    """取markdown表格第一列的值（跳过表头与分隔行）。"""
+    values = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if not cells or not cells[0] or set(cells[0]) <= set("-: "):
+            continue
+        values.append(cells[0])
+    return values[1:] if values else []      # 首行是表头
+
+
+def check_structure(content: str) -> str:
+    """四个小节齐不齐、顺序对不对。"""
+    sections = split_sections(content)
+    missing = [name for name in REQUIRED_SECTIONS if name not in sections]
+    if missing:
+        return (f"缺少必需的小节: {'、'.join('## ' + m for m in missing)}"
+                f"（现有小节: {'、'.join(sections) or '无'}）")
+    order = [name for name in sections if name in REQUIRED_SECTIONS]
+    if order != REQUIRED_SECTIONS:
+        return f"小节顺序不对: 应为 {' → '.join(REQUIRED_SECTIONS)}，实际为 {' → '.join(order)}"
+    return ""
+
+
+def check_precheck_linear(content: str) -> str:
+    """前置检查里不许有内部跳转。"""
+    section = split_sections(content).get("前置检查", "")
+    hit = STEP_REFERENCE.search(section)
+    if hit:
+        return (f"前置检查里出现了跳转“{hit.group(0)}”——前置检查必须是线性执行的"
+                f"信息采集，分支判断放到排查步骤里")
+    return ""
+
+
+def table_rows(section: str) -> list:
+    """取markdown表格的数据行（去掉表头与分隔行），每行为单元格列表。"""
+    rows = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if not cells or not cells[0] or set(cells[0]) <= set("-: "):
+            continue
+        rows.append(cells)
+    return rows[1:] if rows else []
+
+
+def check_declared_params(content: str) -> str:
+    """前置检查用到的参数必须是入参列表里的必填项。
+
+    只约束前置检查：排查步骤里的参数（如从回显才能拿到的 <segment-list-id>）
+    本来就允许是选填的。
+    """
+    sections = split_sections(content)
+    rows = table_rows(sections.get("入参列表", ""))
+    if not rows:
+        return "入参列表里没有解析到任何行，需要是三列表格（信息/是否必填/说明）"
+    required = {re.sub(r"[\s\-_]", "", row[0]).lower()
+                for row in rows if len(row) > 1 and row[1].strip() in ("是", "Y", "yes")}
+    if not required:
+        return "入参列表里没有任何必填项（「是否必填」列为「是」的行）"
+    for span in INLINE_CODE.findall(sections.get("前置检查", "")):
+        for param in re.findall(r"<([^>\n]+)>", span):
+            key = re.sub(r"[\s\-_]", "", param).lower()
+            if not any(key == r or key in r or r in key for r in required):
+                return (f"前置检查的命令用了参数 `<{param}>`，但入参列表里没有对应行——"
+                        f"前置检查的参数不可以超出入参列表")
+    return ""
+
+
+def check_root_causes(content: str, scenario: dict) -> str:
+    """根因三处必须对得上：表里抽出的清单、排查步骤、根因对照表。"""
+    sections = split_sections(content)
+    in_steps = {_normalize_cause(c): c
+                for c in ROOT_CAUSE_MARK.findall(sections.get("排查步骤", ""))}
+    if not in_steps:
+        return ("排查步骤里没有找到 `根因：**名称**` 形式的根因标记，"
+                "根因必须用这个写法才能和根因对照表对上")
+
+    in_table = {_normalize_cause(c): c
+                for c in table_first_column(sections.get("根因对照表", ""))}
+    if not in_table:
+        return "根因对照表里没有解析到任何行，需要是三列表格（根因/现象/修复CLI和方法）"
+
+    missing = [name for key, name in in_steps.items() if key not in in_table]
+    if missing:
+        return (f"根因对照表漏了排查步骤里出现的根因: {'、'.join(missing)}"
+                f"——对照表必须覆盖每一个根因")
+
+    # 表里明确写出的根因，一个都不能漏掉不写
+    expected = {_normalize_cause(c["text"]): c["text"]
+                for c in extract_root_causes(scenario)}
+    absent = [text for key, text in expected.items() if key not in in_steps]
+    if absent:
+        return (f"步骤表里明确写出的根因没有出现在排查步骤中: {'、'.join(absent)}"
+                f"——这些名称要原样使用，不要改写或省略")
+    return ""
+
+
 
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 # 命令里残留的非 <> 占位符：{xxx}、[xxx]、连续大写占位
@@ -509,16 +763,27 @@ def check_skill_format(content: str, scenario: dict) -> str:
     if error:
         return error
 
-    # "继续执行步骤N"必须指向真实存在的步骤
-    step_numbers = set()
-    for match in re.finditer(r"^\s*(\d+)\.\s+\*\*", content, re.MULTILINE):
-        step_numbers.add(int(match.group(1)))
+    for check in (check_structure, check_precheck_linear, check_declared_params):
+        error = check(content)
+        if error:
+            return error
+
+    error = check_root_causes(content, scenario)
+    if error:
+        return error
+
+    # 步骤编号要从1开始连续，"跳转步骤N"必须指向真实存在的步骤
+    steps_section = split_sections(content).get("排查步骤", "")
+    step_numbers = [int(n) for n, _ in STEP_HEADING.findall(steps_section)]
     if not step_numbers:
-        return "正文里没有找到形如 `1. **步骤标题**` 的步骤，不符合输出格式要求"
-    for match in re.finditer(r"步骤\s*(\d+)", content):
-        if int(match.group(1)) not in step_numbers:
-            return (f"正文里的“步骤{match.group(1)}”指向了不存在的步骤"
-                    f"（本篇的步骤号为 {sorted(step_numbers)}）")
+        return ("排查步骤里没有找到形如 `### 步骤 1：名称` 的步骤标题，"
+                "不符合输出格式要求")
+    if step_numbers != list(range(1, len(step_numbers) + 1)):
+        return f"步骤编号不是从1开始的连续整数: {step_numbers}"
+    for match in STEP_REFERENCE.finditer(content):
+        if int(match.group(1)) not in set(step_numbers):
+            return (f"正文里的“{match.group(0)}”指向了不存在的步骤"
+                    f"（本篇的步骤号为 {step_numbers}）")
     return ""
 
 
@@ -575,7 +840,7 @@ def convert_scenario(args: tuple) -> dict:
     scenario, skill_path, api_url, model_name, max_tokens, timeout = args
     prompt = (PROMPT_TEMPLATE
               .replace("<scenario>", format_scenario(scenario))
-              .replace("<format_spec>", FORMAT_SPEC)
+              .replace("<format_spec>", build_format_spec(scenario))
               .replace("<writing_rules>", WRITING_RULES))
     print(f"[PID {os.getpid()}] 改写: {scenario['name']}"
           f"（{len(scenario['steps'])} 步）→ {skill_path}")
