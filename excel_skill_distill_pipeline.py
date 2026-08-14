@@ -77,100 +77,39 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
 
 
-# 输出格式是这次改写的重点，单独成段写进 prompt。
-FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固定、缺一不可：
+# 输出格式的定义放在单独的模板文件里，流水线运行时读进来拼进 prompt。
+# 这样改格式要求只要改那个 markdown，不用动代码——模板本来就是给人看、给人改的。
+SKILL_TEMPLATE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "skill_template.md")
 
-`## 入参列表` → `## 前置检查` → `## 排查步骤` → `## 根因对照表`
+TEMPLATE_BODY = re.compile(r"<template>\s*(.+?)\s*</template>", re.DOTALL)
 
-整体思路：**前置检查负责把命令跑完、把回显采集齐；排查步骤只对这些回显做判定**。所以同一条命令只在前置检查里执行一次，后面各步骤引用它的回显即可，不要在每个步骤里重复执行同一条命令。
 
-# 一、入参列表
+def load_skill_template(path: str = SKILL_TEMPLATE_PATH) -> str:
+    """读模板文件里 <template>…</template> 之间的正文。
 
-三列表格，列出执行本篇排查所需的入参：
+    标签外面是给维护者看的说明（这文件是干嘛的、改完怎么验），不该进 prompt。
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"找不到skill模板 {path}；它定义了生成的skill长什么样，是prompt的一部分")
+    text = open(path, encoding="utf-8").read()
+    match = TEMPLATE_BODY.search(text)
+    if not match:
+        raise ValueError(
+            f"{path} 里没有 <template>…</template> 标记，无法确定哪一段是模板正文")
+    body = match.group(1).strip()
+    if not body:
+        raise ValueError(f"{path} 的 <template> 里是空的")
+    return body
 
-```
-## 入参列表
 
-| 信息 | 是否必填 | 说明 |
-| --- | --- | --- |
-| 网元ID | 是 | 网元的resId，用于确定CLI下发的目标设备 |
-| endpoint IPv6 | 是 | 告警中SRv6 TE Policy的endpoint地址 |
-| color ID | 是 | 告警中SRv6 TE Policy的color值 |
-| segment-list ID | 否 | 由前置检查的回显中获取，无需用户提供 |
-```
+# 这两段不能进模板文件：它们要按场景现填（参数清单、根因清单从步骤表里抽），
+# 而模板是静态的、对所有场景通用。
+SCENARIO_SPEC = """
+# 本场景的入参
 
-- 「信息」列写参数的可读名称，去掉空格和连字符后要能和CLI里的参数名对上（`<endpoint-ipv6>` 对应「endpoint IPv6」，`<color-id>` 对应「color ID」）。
-- 用户提供不了、只能从回显里读出来的参数（如 `<segment-list-id>`），「是否必填」写「否」并在说明里注明来自哪一步的回显。
-- 本场景的命令已经用到下列参数，入参列表必须覆盖它们：<derived_params>
-
-# 二、前置检查
-
-把诊断需要的命令按序执行一遍、采集回显字段。写法与排查步骤相同，用 `### N. 名称` 作标题，并多一项「需记录字段」说明哪些回显要留给后面的步骤复用：
-
-```
-## 前置检查
-
-### 1. 采集 SRv6 TE Policy 运行状态
-
-- **CLI命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
-- **跳转信息**：
-  - 回显中不存在对应 endpoint/color 的 Policy → 根因定位为"SRv6 TE Policy 不存在"，结束排查
-  - `Policy State` 为 `Up` 且 `List State` 为 `Up` → 隧道状态正常，结束排查
-  - 其余情况 → 继续前置检查步骤 2
-- **根因定位**：SRv6 TE Policy 不存在
-- **需记录字段**（后续步骤复用）：`Policy State`、srlist 部分的 `List State`、`BFD State`、`Verification State`
-```
-
-两条硬要求：
-1. **CLI之间必须是线性执行关系，不可以有内部跳转**——只能"继续前置检查步骤 N+1"或直接结束排查，不许出现"跳转步骤 N"往回跳或跳着走。
-2. **前置检查用到的CLI参数不可以超出入参列表中的必填项**（标「是」的那些）。只能从回显里拿到的参数（如 `<segment-list-id>`）不能出现在前置检查的命令里。
-
-# 三、排查步骤
-
-按序执行；任一步已定位并修复且复检通过后，后续步骤停止。每步用 `### N. 名称` 作标题，编号从1开始连续，并写全下面三类信息：
-
-```
-### 3. 检查 SRv6 TE Policy 是否被 shutdown
-
-- **CLI命令**：复用前置检查步骤 1 回显的 `Policy State` 字段
-- **跳转信息**：`Policy State` 不为 `Down (Shutdown)` → 跳转步骤 4
-- **根因定位**：`Policy State` 为 `Down (Shutdown)` → "SRv6 TE Policy 被 shutdown"
-```
-
-需要额外下发命令时这样写：
-
-```
-### 4. 检查 BFD 检测状态
-
-- **CLI命令**：
-  1. 复用前置检查步骤 1 回显 srlist 部分的 `BFD State` 字段
-  2. 若 `BFD State` 为 `Down`，执行 `display bfd session srv6-segment-list <segment-list-id>`
-- **跳转信息**：`BFD State` 不为 `Down` → 跳转步骤 5
-- **根因定位**：`BFD State` 为 `Down` → "BFD 检测 Down"
-```
-
-写法要求：
-- **CLI命令**：接口名用全称（写 `GigabitEthernet0/1/0`，不写 `GE0/1/0`），变量用 `<>` 包裹，命令用反引号包成行内代码。判据来自前置检查已采集的回显时，写"复用前置检查步骤 N 回显的 X 字段"，**不要重复下发同一条命令**。
-- **跳转信息**：依据回显的哪个字段、什么取值，跳到哪一步或结束。判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在。最后一步要写清全部判据都不命中时的去向（判定"未找到根因"并输出已执行的检查项）。
-- **根因定位**：写清依据回显的什么条件推出哪个根因，根因名称用引号标出。**这里只给根因名称，不要写修复动作和复检命令**——它们统一放在根因对照表里，避免同一份修复在两处各写一遍、改了一处忘另一处。
-
-# 四、根因对照表
-
-四列表格，**必须包含排查步骤里出现过的每一个根因**，一个不能漏。修复和复检都写在这里：
-
-```
-## 根因对照表
-
-| 根因 | 现象 | 修复CLI和方法 | 复检命令（可选） |
-| --- | --- | --- | --- |
-| SRv6 TE Policy被shutdown | `Policy State` 为 `Down (Shutdown)` | 在该Policy视图下执行 `undo shutdown` | `display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（标准：`Policy State` 为 `Up`） |
-```
-
-- 「现象」写判定这个根因所依据的字段与取值。
-- 「修复CLI和方法」写具体的CLI或操作；表里没给修复手段的根因，写"无直接修复CLI"并说明只能定位，不要编命令。影响性大的修复在这一列注明影响与建议的操作时机。
-- 「复检命令（可选）」写修复后用什么命令确认、通过标准是什么；表里没给复检手段时留 `-`。
-
-「根因」列的文字要和排查步骤「根因定位」里写的名称**逐字一致**，否则对不上。
+本场景的命令已经用到下列参数，入参列表必须覆盖它们：<derived_params>
 
 # 本场景的根因清单（必须逐字使用）
 
@@ -190,15 +129,9 @@ FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固�
     如果不是Up，则继续向下执行；如果是Up，则判断List State是否为Up，如果不是，则继续向下执行；
     如果都是Up，则返回"状态正常"并结束执行。
 
-这种写法agent容易漏分支，必须按上面的格式拆开：每个分支单独一行、写清判据字段与取值、写清去向（跳转步骤N / 结束排查）。不要写"继续向下执行"这种没有具体去向的说法。
+这种写法agent容易漏分支，必须按模板的格式拆开：每个分支单独一行、写清判据字段与取值、写清去向（跳转步骤N / 结束排查）。不要写"继续向下执行"这种没有具体去向的说法。
 
-# 命令行的格式约束
-
-- 命令一律用反引号包成行内代码；多行配置序列用围栏代码块。
-- 可变参数一律用尖括号 `<>`，不要用 `{}`、`[]`、`XXX` 或大写占位符。
-- 参数名用小写英文，多个单词用连字符分隔：`<endpoint-ipv6>`、`<color-id>`、`<segment-list-id>`。输入表里参数写法不统一（`<endpointipv6>`、`<colorid>` 连在一起），按这条规则统一改写。
-- **同一个参数在整篇skill里必须用同一个名字**。
-- 不要保留输入表里的"1号命令行"、"执行4号命令"这类编号说法，直接写出命令本身。
+不要保留输入表里的"1号命令行"、"执行4号命令"这类编号说法，直接写出命令本身——agent 看不到那张表。
 """
 
 
@@ -214,7 +147,7 @@ PROMPT_TEMPLATE = """你是IPRAN网络运维专家，需要把一份排障步骤
 
 # 内容要求
 <writing_rules>
-- 输出完整的skill，以frontmatter开头，frontmatter 之后直接写 `## 入参列表`，不要一级标题。frontmatter 的 name 用英文小写+连字符；description 写「故障现象 + 适用时机」，例如"SRv6 TE Policy Down（隧道中断）。出现 SRv6 隧道不通 / SR-Policy 状态异常等告警时使用，覆盖配置缺失、BFD Down、规格超限等场景。"
+- 输出完整的skill，以frontmatter开头，frontmatter 之后直接按模板写四个章节（从一级标题 `# 入参列表` 开始），不要再另加篇名标题。frontmatter 的 name 用英文小写+连字符；description 写「故障现象 + 适用时机」，例如"SRv6 TE Policy Down（隧道中断）。出现 SRv6 隧道不通 / SR-Policy 状态异常等告警时使用，覆盖配置缺失、BFD Down、规格超限等场景。"
 - 步骤表里靠同一条命令的回显区分的多个根因，把那条命令放进前置检查采集一次，各步骤复用它的回显——不要每步重复下发。据此重新编排步骤是允许的，但判据本身要忠实于表格。
 - 表里"修复建议影响性"列的内容写进对应根因的「修复」里作为影响性提示；"修复验证"列的内容写成该根因的「复检命令」。
 
@@ -477,14 +410,14 @@ def format_scenario(scenario: dict) -> str:
 
 
 def build_format_spec(scenario: dict) -> str:
-    """把本场景抽出来的参数与根因填进格式规范。
+    """模板文件 + 本场景抽出来的参数与根因，拼成 prompt 的格式要求部分。
 
-    这两样都能从表里确定性地拿到，交给模型自己想只会想歪：参数名会写混，
+    参数和根因都能从表里确定性地拿到，交给模型自己想只会想歪：参数名会写混，
     根因名会被改写成同义词，改写完根因对照表就和排查步骤对不上了。
     """
     params = collect_parameters(scenario)
     causes = extract_root_causes(scenario)
-    return (FORMAT_SPEC
+    return (load_skill_template() + "\n\n" + SCENARIO_SPEC
             .replace("<derived_params>",
                      "、".join(f"`<{p}>`" for p in params) or "（表里的命令没有参数）")
             .replace("<root_causes>",
@@ -507,19 +440,20 @@ STEP_HEADING = re.compile(
 STEP_REFERENCE = re.compile(r"(?:跳转|转入?|进入)\s*(?:排查)?步骤\s*(\d+)")
 
 
+# 只认这四个章节名作切分点，且 # / ## 两级都收。
+# 模板要求章节用一级标题（`# 入参列表`）、步骤用二级（`## 1. 名称`）；但按标题级别
+# 切会把步骤标题也当成章节，按名字切才稳，顺带兼容写成 `## 入参列表` 的产出。
+SECTION_HEADING = re.compile(
+    r"^#{1,2}\s*(" + "|".join(REQUIRED_SECTIONS) + r")\s*$", re.MULTILINE)
+
+
 def split_sections(content: str) -> dict:
-    """按 `## 小节名` 切分正文，返回 {小节名: 正文}。"""
-    sections, current, buf = {}, None, []
-    for line in content.splitlines():
-        match = re.match(r"^##\s+(.+?)\s*$", line)
-        if match:
-            if current:
-                sections[current] = "\n".join(buf)
-            current, buf = match.group(1).strip(), []
-        elif current:
-            buf.append(line)
-    if current:
-        sections[current] = "\n".join(buf)
+    """按四个章节标题切分正文，返回 {章节名: 正文}。"""
+    sections = {}
+    matches = list(SECTION_HEADING.finditer(content))
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        sections[match.group(1)] = content[match.end():end]
     return sections
 
 

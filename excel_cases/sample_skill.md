@@ -3,7 +3,7 @@ name: srv6-te-policy-down
 description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Policy down 告警、隧道不通、业务流量无法按 color 引流或倒换失败时使用。
 ---
 
-## 入参列表
+# 入参列表
 
 | 信息 | 是否必填 | 说明 |
 | --- | --- | --- |
@@ -13,9 +13,9 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 | segment-list ID | 否 | 从前置检查步骤 1 的回显中提取，无需人工输入 |
 | BGP AS号 | 否 | 仅在修复"ipv6-family sr-policy 地址族未配置"时使用 |
 
-## 前置检查
+# 前置检查
 
-### 1. 采集 SRv6 TE Policy 运行状态
+## 1. 采集 SRv6 TE Policy 运行状态
 
 - **CLI命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
 - **跳转信息**：
@@ -25,16 +25,16 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 - **根因定位**：SRv6 TE Policy 不存在
 - **需记录字段**（后续步骤复用）：`Policy State`、srlist 部分的 `List State`、`BFD State`、`Verification State`、Segment List 名称与 ID
 
-### 2. 采集 SRv6 静态配置
+## 2. 采集 SRv6 静态配置
 
 - **CLI命令**：`display current-configuration configuration segment-routing-ipv6`
 - **跳转信息**：执行完成后进入排查步骤 1
 - **根因定位**：无（仅采集配置，判定在排查步骤 1 进行）
 - **需记录字段**：`srv6-te policy` 配置块、`candidate-path` 及其引用的 `segment-list`、`segment-list` 下的 `index ... sid ipv6` 条目
 
-## 排查步骤
+# 排查步骤
 
-### 1. 判定静态配置完整性
+## 1. 判定静态配置完整性
 
 - **CLI命令**：复用前置检查步骤 2 的回显，无需重复下发
 - **跳转信息**：
@@ -42,19 +42,19 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
   - 配置完整（含 candidate path、所引用的 segment list 及 SID）→ 跳转步骤 2
 - **根因定位**：配置了 candidate path 但未引用 segment list，或所引用的 segment list 下无 SID 配置 → "SRv6 TE Policy 配置不完整"
 
-### 2. 检查 BGP SR-Policy 地址族配置
+## 2. 检查 BGP SR-Policy 地址族配置
 
 - **CLI命令**：`display current-configuration configuration bgp`
 - **跳转信息**：已配置 `ipv6-family sr-policy` 地址族 → 跳转步骤 3
 - **根因定位**：未配置 `ipv6-family sr-policy` 地址族 → "ipv6-family sr-policy 地址族未配置"
 
-### 3. 检查 SRv6 TE Policy 是否被 shutdown
+## 3. 检查 SRv6 TE Policy 是否被 shutdown
 
 - **CLI命令**：复用前置检查步骤 1 回显的 `Policy State` 字段
 - **跳转信息**：`Policy State` 不为 `Down (Shutdown)` → 跳转步骤 4
 - **根因定位**：`Policy State` 为 `Down (Shutdown)` → "SRv6 TE Policy 被 shutdown"
 
-### 4. 检查 BFD 检测状态
+## 4. 检查 BFD 检测状态
 
 - **CLI命令**：
   1. 复用前置检查步骤 1 回显 srlist 部分的 `BFD State` 字段
@@ -62,7 +62,7 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 - **跳转信息**：`BFD State` 不为 `Down` → 跳转步骤 5
 - **根因定位**：`BFD State` 为 `Down` → "BFD 检测 Down"
 
-### 5. 检查故障感知（SID 可达性）
+## 5. 检查故障感知（SID 可达性）
 
 - **CLI命令**：
   1. 复用前置检查步骤 1 回显 srlist 部分的 `List State` 与 `Verification State` 字段
@@ -70,7 +70,7 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 - **跳转信息**：`List State` 不为 `Down (SID Stack Down)` 或 `Verification State` 不为 `SID Unreachable` → 跳转步骤 6
 - **根因定位**：两个条件同时满足 → "故障感知检测 Down"
 
-### 6. 检查 SRv6 TE Policy 规格超限
+## 6. 检查 SRv6 TE Policy 规格超限
 
 - **CLI命令**：
   1. 复用前置检查步骤 1 回显的 `Policy State` 字段
@@ -78,7 +78,7 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 - **跳转信息**：`Policy State` 不为 `Down (Overrun)` → 跳转步骤 7
 - **根因定位**：`Policy State` 为 `Down (Overrun)` → "SRv6 TE Policy 超限"
 
-### 7. 检查 srlist 规格超限
+## 7. 检查 srlist 规格超限
 
 - **CLI命令**：
   1. 复用前置检查步骤 1 回显 srlist 部分的 `List State` 字段
@@ -86,7 +86,7 @@ description: SRv6 TE Policy Down（SR-Policy 隧道中断）。出现 SRv6 TE Po
 - **跳转信息**：`List State` 不为 `Down (Overrun)` → 判定"未找到根因"，输出已执行的全部检查步骤及结果摘要，结束排查
 - **根因定位**：`List State` 为 `Down (Overrun)` → "srlist 超限"
 
-## 根因对照表
+# 根因对照表
 
 | 根因 | 现象 | 修复CLI和方法 | 复检命令（可选） |
 | --- | --- | --- | --- |
