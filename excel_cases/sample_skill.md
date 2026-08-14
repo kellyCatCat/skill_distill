@@ -51,9 +51,10 @@ description: SRv6 TE Policy Down（隧道中断）。出现 SRv6 TE Policy Down 
 
 - **CLI命令**：无（基于前置检查 1 回显判定）
 - **跳转信息**：
-  - 若 Policy 存在，且 `Policy State` 为 `Up` 且所有 srlist 的 `List State` 均为 `Up` → 判定隧道状态正常，结束排查。
   - 若 Policy 存在但 `Policy State` 或 `List State` 不为 `Up` → 跳转步骤 2。
 - **根因定位**：
+  - Policy 存在，且 `Policy State` 为 `Up`、所有 srlist 的 `List State` 均为 `Up` → 根因：**SRv6 TE Policy状态正常**
+    - 修复：无需修复，隧道状态正常。核对告警是否已自动清除；若告警仍未清除，返回本步骤采集到的字段取值供用户判断。
   - 前置检查 1 无回显，即指定 endpoint/color 的 SRv6 TE Policy 不存在 → 根因：**SRv6 TE Policy不存在**
     - 修复（静态配置场景，按需补齐）：
       ```
@@ -165,6 +166,7 @@ description: SRv6 TE Policy Down（隧道中断）。出现 SRv6 TE Policy Down 
 
 | 根因 | 现象 | 修复CLI和方法 |
 | --- | --- | --- |
+| SRv6 TE Policy状态正常 | `Policy State` 为 `Up`，且所有 srlist 的 `List State` 均为 `Up` | 无需修复。隧道状态正常，核对告警是否已自动清除 |
 | SRv6 TE Policy不存在 | 查询该 endpoint/color 的 Policy 无回显 | 静态场景补齐 `segment-routing ipv6` 下的 segment-list 与 srv6-te policy 配置；动态场景确认控制器下发及 BGP 地址族 |
 | SRv6 TE Policy配置不完整 | 已配置 candidate path，但未引用 segment list，或 segment list 下无 SID | 在 segment-list 下补齐 SID 栈配置。建议业务低峰期操作 |
 | ipv6-family sr-policy地址族未配置 | BGP 配置中无 `ipv6-family sr-policy`，控制器下发的 Policy 无法生效 | `bgp <as-number>` → `ipv6-family sr-policy` → `peer <peer-ip> enable`；复检 `display bgp sr-policy ipv6 peer` 为 `Established` |

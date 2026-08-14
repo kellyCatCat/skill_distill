@@ -173,6 +173,8 @@ FORMAT_SPEC = """输出的skill必须依次包含下面四个小节，顺序固�
 
 **这些名称要原样使用**，不要改写、简化或另起名字（`{endpoint/color}` 这类占位可以去掉或替换成实际参数）。排查步骤里的 `根因：**…**` 和根因对照表的「根因」列都用它们，两处必须一致。清单之外不要自己发明根因；清单里的每一条都必须在排查步骤中出现。
 
+清单里标了「无故障分支」的那条（如"……状态正常"）**同样要当作一条根因写全**：在对应步骤里写成 `根因：**……状态正常**`，并在根因对照表里占一行——「现象」写判定它的字段与取值，「修复CLI和方法」写"无需修复"。agent 排到这一支时也需要有对照可依，漏掉它会让 agent 以为自己少判了一步。
+
 # 分支必须逐条展开（改写的核心）
 
 输入表格的"步骤详细描述"习惯把多个分支塞进一长句，例如：
@@ -356,17 +358,21 @@ def _normalize_cause(text: str) -> str:
 
 
 def extract_root_causes(scenario: dict) -> list:
-    """从步骤详细描述里抽出根因名称（排除"状态正常"这类健康结论）。"""
+    """从步骤详细描述里抽出每一步的判定结论。
+
+    "……状态正常"这类**无故障分支**同样算一条结论，要一并写进排查步骤和根因对照表：
+    agent 排到那一支时也需要有对照可依，否则会以为漏了判断。只是它的「修复」是
+    "无需修复"。normal 字段用来在 prompt 里标注这一点。
+    """
     causes = []
     seen = set()
     for step in scenario["steps"]:
         for text in CONCLUSION_PATTERN.findall(step["detail"] or ""):
-            if "正常" in text:
-                continue          # 健康结论，不是根因
             key = _normalize_cause(text)
             if key and key not in seen:
                 seen.add(key)
-                causes.append({"step": step["no"], "text": text.strip()})
+                causes.append({"step": step["no"], "text": text.strip(),
+                               "normal": "正常" in text})
     return causes
 
 
@@ -475,8 +481,10 @@ def build_format_spec(scenario: dict) -> str:
             .replace("<derived_params>",
                      "、".join(f"`<{p}>`" for p in params) or "（表里的命令没有参数）")
             .replace("<root_causes>",
-                     "\n".join(f"{i}. {c['text']}（来自步骤{c['step']}）"
-                               for i, c in enumerate(causes, 1))
+                     "\n".join(
+                         f"{i}. {c['text']}（来自步骤{c['step']}"
+                         f"{'，无故障分支' if c['normal'] else ''}）"
+                         for i, c in enumerate(causes, 1))
                      or "（表里没有明确写出判定结论，按步骤描述自行归纳）"))
 
 
