@@ -11,8 +11,13 @@
 套到 MiniMax-M2.7-thinking 上会把思考压掉，等于花大模型的钱拿小模型的输出。
 
 用法：
-  python3 model_config.py            # 打印当前解析出的配置（密钥打码），自查用
-  python3 model_config.py --probe    # 再向每个模型发一个最小请求，确认链路真的通
+  python3 model_config.py                    # 打印已登记模型的配置（密钥打码），自查用
+  python3 model_config.py --probe            # 再向每个模型发一个最小请求，确认链路真的通
+  python3 model_config.py <模型名> [--probe]  # 探测指定模型，不必先登记
+
+注意：下面的 MODEL_PROFILES 才是"有哪些模型"的来源，.env 只放地址和密钥。往 .env
+里加东西不会让新模型出现在列表里——要么登记进 MODEL_PROFILES，要么用第三种用法
+直接按名字探测（没登记的按兜底档处理：QWEN 前缀、不开思考、max_tokens 16384）。
 """
 import json
 import os
@@ -204,27 +209,48 @@ def probe(cfg: dict, timeout: int = 120, max_tokens: int = 1024) -> str:
                           message.get("reasoning_content") or "", max_tokens, cfg, "")
 
 
-def main(do_probe: bool = False):
+def main(do_probe: bool = False, names: list = None):
     print("=" * 72)
     print(f"模型接入配置（.env: {'已读取' if os.path.isfile(ENV_PATH) else '不存在'}）")
     print("=" * 72)
-    for name in MODEL_PROFILES:
+
+    # 先把 .env 里认出来的前缀列出来。加了新模型却看不到它，多半是因为这里
+    # 列的是**代码里登记过的模型**，而 .env 只放地址和密钥、表达不了模型名。
+    env = load_env_file()
+    suffixes = ("_BASE_URL", "_API_KEY", "_MAX_TOKENS")
+    prefixes = sorted({key[:-len(suffix)] for key in env for suffix in suffixes
+                       if key.endswith(suffix)})
+    if prefixes:
+        print(f"\n.env 里的前缀: {'、'.join(prefixes)}")
+        unused = [p for p in prefixes
+                  if p not in {v["env_prefix"] for v in MODEL_PROFILES.values()}]
+        if unused:
+            print(f"  [WARN] {'、'.join(unused)} 没有任何模型在用——"
+                  f"模型要登记进 model_config.MODEL_PROFILES 才会出现在下面，"
+                  f"或者直接 `python3 model_config.py <模型名> --probe` 临时探测")
+
+    for name in (names or list(MODEL_PROFILES)):
         try:
             cfg = resolve_model(name)
         except ValueError as e:
             print(f"\n● {name}\n    [FAIL] {e}")
             continue
-        print(f"\n● {name}")
+        print(f"\n● {name}" + ("" if cfg["registered"] else "（未登记，按兜底配置处理）"))
         print(f"    地址      : {cfg['api_url']}")
         print(f"    密钥      : {_mask(cfg['api_key'])}")
         print(f"    max_tokens: {cfg['max_tokens']}")
         print(f"    思考      : "
               f"{'会思考（不发关思考的字段，预算已留给推理）' if cfg['thinking'] else '关'}")
+        if not cfg["registered"]:
+            print(f"    说明      : 走的是兜底档（{DEFAULT_PROFILE['env_prefix']} 前缀、"
+                  f"不开思考、max_tokens {DEFAULT_PROFILE['max_tokens']}）。"
+                  f"地址不对或它会思考的话，要登记进 MODEL_PROFILES")
         if do_probe:
             print(f"    探测      : {probe(cfg)}")
     print(f"\nNO_PROXY: {os.environ.get('NO_PROXY', '（空）')}")
 
 
 if __name__ == "__main__":
-    main(do_probe="--probe" in sys.argv[1:])
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    main(do_probe="--probe" in sys.argv[1:], names=args or None)
     sys.exit(0)
