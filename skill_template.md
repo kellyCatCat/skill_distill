@@ -22,7 +22,7 @@ description: 故障现象 + 适用时机。例：基站掉站。出现掉站/站
 ```
 
 以下章节从一级标题开始，每级增加一个 `#`。也就是说四个章节写成 `# 入参列表`、`# 前置检查`、
-`# 排查步骤`、`# 根因对照表`，章节内的步骤写成 `## 1. 步骤名称`。
+`# 排查步骤`、`# 根因对照表`，排查步骤内的每一步写成 `## 步骤N：步骤名称`。
 
 四个章节顺序固定、缺一不可：`# 入参列表` → `# 前置检查` → `# 排查步骤` → `# 根因对照表`。
 
@@ -51,20 +51,22 @@ description: 故障现象 + 适用时机。例：基站掉站。出现掉站/站
 1. CLI 之间必须是分步骤的线性执行关系，不可以有内部跳转
 2. 所有 CLI 的参数不可以超出**入参列表**中的必填项目
 
-前置检查还可以多写一项「需记录字段」，说明哪些回显要留给后面的步骤复用：
+前置检查各条写成有序列表，每条给出 CLI 命令与采集内容；能在采集阶段就判定的根因，
+写一行「根因定位」：
 
 ```
 # 前置检查
 
-## 1. 采集 SRv6 TE Policy 运行状态
+前置检查按顺序线性执行，仅用于采集后续排查所需的回显信息，不做跳转。
 
-- **CLI命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
-- **跳转信息**：
-  - 回显中不存在对应 endpoint/color 的 Policy → 根因定位为"SRv6 TE Policy 不存在"，结束排查
-  - `Policy State` 为 `Up` 且 `List State` 为 `Up` → 隧道状态正常，结束排查
-  - 其余情况 → 继续前置检查步骤 2
-- **根因定位**：SRv6 TE Policy 不存在
-- **需记录字段**（后续步骤复用）：`Policy State`、srlist 部分的 `List State`、`BFD State`、`Verification State`
+1. **查询目标 SRv6 TE Policy 状态**
+   - CLI 命令：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`
+   - 采集内容：`Policy State`、`List State`、`Verification State`、`BFD State`、Segment List ID 与 Policy 名称。
+   - 根因定位：若回显为空或提示该 Policy 不存在，判定根因为"SRv6 TE Policy 不存在"，结束排查。
+
+2. **采集 SRv6 静态配置**
+   - CLI 命令：`display current-configuration configuration segment-routing-ipv6`
+   - 采集内容：`segment-routing ipv6` 视图下的 SRv6 TE Policy、candidate path、segment list 及 SID 配置。
 ```
 
 ## 排查步骤
@@ -77,38 +79,50 @@ description: 故障现象 + 适用时机。例：基站掉站。出现掉站/站
 4. **根因定位：**
    - 根据CLI的回显，可以推导出哪些根因，给出根因名称
 
+每个步骤用 `## 步骤N：名称` 作标题，四类信息写成有序列表：
+
 ```
 # 排查步骤
 
-## 3. 检查 SRv6 TE Policy 是否被 shutdown
+默认按顺序执行。步骤1至步骤3、步骤4至步骤8直接复用前置检查已采集的回显，无需重复执行 CLI。
 
-- **CLI命令**：复用前置检查步骤 1 回显的 `Policy State` 字段
-- **跳转信息**：`Policy State` 不为 `Down (Shutdown)` → 跳转步骤 4
-- **根因定位**：`Policy State` 为 `Down (Shutdown)` → "SRv6 TE Policy 被 shutdown"
+## 步骤4：检查 SRv6 TE Policy 是否被 shutdown
+
+1. **步骤名称**：检查 SRv6 TE Policy 是否被 shutdown
+2. **CLI 命令**：`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（查看 `Policy State` 字段）
+3. **跳转信息**：
+   - `Policy State` 不为 `Down (Shutdown)`：顺序执行步骤5。
+   - `Policy State` 为 `Down (Shutdown)`：定位根因，结束排查。
+4. **根因定位**：
+   - SRv6 TE Policy 被 shutdown
 ```
 
-需要额外下发命令时这样写：
+需要额外下发命令时，「CLI 命令」下列多条并注明触发条件：
 
 ```
-## 4. 检查 BFD 检测状态
+## 步骤5：检查是否因 BFD Down 导致中断
 
-- **CLI命令**：
-  1. 复用前置检查步骤 1 回显 srlist 部分的 `BFD State` 字段
-  2. 若 `BFD State` 为 `Down`，执行 `display bfd session srv6-segment-list <segment-list-id>`
-- **跳转信息**：`BFD State` 不为 `Down` → 跳转步骤 5
-- **根因定位**：`BFD State` 为 `Down` → "BFD 检测 Down"
+1. **步骤名称**：检查是否因 BFD Down 导致中断
+2. **CLI 命令**：
+   - `display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（查看 srlist 部分 `BFD State` 字段）
+   - `display bfd session srv6-segment-list <segment-list-id>`（仅当 `BFD State` 为 `Down` 时执行）
+3. **跳转信息**：
+   - `BFD State` 不为 `Down`：顺序执行步骤6。
+   - `BFD State` 为 `Down`：执行 BFD 会话查询确认后定位根因，结束排查。
+4. **根因定位**：
+   - bfd 检测 Down
 ```
 
 补充要求：
 
 - 步骤编号从 1 开始连续。
-- **CLI命令**：判据来自前置检查已采集的回显时，写"复用前置检查步骤 N 回显的 X 字段"，
-  **不要重复下发同一条命令**。
-- **跳转信息**：判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在。
-  顺序执行到下一步时无需额外标注。最后一步要写清全部判据都不命中时的去向
-  （判定"未找到根因"并输出已执行的检查项）。
+- **CLI 命令**：判据来自前置检查已采集的回显时，注明"复用前置检查步骤 N 回显"或"查看 X 字段"，
+  **不要真的重复下发同一条命令**。
+- **跳转信息**：判据字段与取值都用反引号标出；"跳转步骤 N"里的 N 必须真实存在，
+  落到下一步时写"顺序执行步骤 N+1"。最后一步要写清全部判据都不命中时的去向
+  （判定"未找到根因"，输出已执行的全部检查步骤及结果摘要，结束排查）。
 - **根因定位**：只给根因名称，**不要写修复动作和复检命令**——它们统一放在根因对照表里，
-  避免同一份修复在两处各写一遍、改了一处忘另一处。
+  避免同一份修复在两处各写一遍、改了一处忘另一处。本步骤不产生根因时写"无"。
 
 ## 根因对照表
 

@@ -587,6 +587,16 @@ TABLE_REFERENCE = re.compile(r"\d+\s*号命令(行)?|执行\s*\d+\s*号")
 FENCE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 QUERY_PREFIX = re.compile(r"^(display|tracert|ping)\b")
 
+# 把问题转出去的兜底措辞。BANNED_CONTENT_PATTERNS 拦的是"联系技术支持"那批词，
+# 这里补的是同一件事的另一种说法——排查不出来时写"转人工分析""收集诊断信息升级处理"，
+# agent 同样执行不了，排障链条到这里就断了。
+# 允许的写法是：输出"未找到根因" + 已执行的检查项 + 关键回显，交用户判断。
+ESCALATION_PATTERNS = [
+    (r"转人工|升级处理|收集诊断信息|派单|上报工单|转专家|工单",
+     "排查不出根因时不要写成把问题转出去的动作，agent 执行不了；"
+     "应输出“未找到根因”、已执行的检查项与关键回显，交用户判断"),
+]
+
 # 这些关键字后面跟的是随设备而变的对象名/编号，必须写成 <参数>。
 # qwen 会把样例回显里的具体值抄进修复CLI（实测抄出过 `bgp 100`、
 # `undo segment-list list1`）——在别的设备上执行要么失败，要么误建/误删对象。
@@ -682,7 +692,7 @@ def check_skill_format(content: str, scenario: dict) -> str:
     if len(re.findall(r"^\s*```", content, re.MULTILINE)) % 2 != 0:
         return "代码块围栏未闭合，疑似输出被截断"
 
-    for pattern, advice in BANNED_CONTENT_PATTERNS:
+    for pattern, advice in BANNED_CONTENT_PATTERNS + ESCALATION_PATTERNS:
         hit = re.search(pattern, content)
         if hit:
             return f"正文出现了'{hit.group(0)}'：{advice}"
