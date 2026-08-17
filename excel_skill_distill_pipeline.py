@@ -1151,8 +1151,8 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
                 # 截一半就没法改了。改完把这个块的标题从 "### " 换成
                 # "## 新建skill：" 就能被 apply_change_report.py 落盘。
                 lines += ["", "<details><summary>最后一次生成的内容"
-                          "（改掉上面那条原因后，把本节标题改成 "
-                          "`## 新建skill：` 即可用 apply_change_report.py 落盘）"
+                          "（改掉上面那条原因后，把本节的三级标题提升为"
+                          "「新建skill」二级标题，即可用 apply_change_report.py 落盘）"
                           "</summary>", "",
                           "````markdown", r["content"].strip(), "````", "",
                           "</details>", ""]

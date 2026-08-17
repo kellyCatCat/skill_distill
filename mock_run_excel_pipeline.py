@@ -195,12 +195,14 @@ def main(which: str):
                                os.path.join(workdir, "c"))
             if code == 0:
                 failures.append("C 违规回复本应被拦下，却判成了成功")
-            text = open(report, encoding="utf-8").read()
-            # 失败块里**要**留下最后一次生成的内容（供人工改），但它挂在 `### ` 下，
-            # apply_change_report 只认 `## 新建skill：`，所以落不了盘——这两件事
-            # 要分开验：内容在、且不可落盘。
-            if "## 新建skill：" in text:
-                failures.append("C 违规回复不该产出可落盘的块")
+            # 失败块里**要**留下最后一次生成的内容（供人工改），但它必须落不了盘。
+            # 这两件事分开验，而且"落不了盘"要用真正的落盘解析器来判——
+            # 按字符串搜标题会被失败块里那句提示语误伤（它字面包含那个标题）。
+            import apply_change_report
+            landable = apply_change_report.parse_report(report)
+            if landable:
+                failures.append(
+                    f"C 违规回复不该产出可落盘的块，实际解析出 {len(landable)} 处")
             if not skill_body(report):
                 failures.append("C 失败时应保留最后一次生成的内容供人工修")
 
