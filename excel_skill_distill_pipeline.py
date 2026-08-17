@@ -14,15 +14,17 @@
 `<segment-list-id>` 三种参数写法混用，输出里统一成 <小写-连字符> 并用反引号包起来。
 
 流程：
-  1. 解析 xlsx：一个 sheet 多个场景，靠首列的**合并单元格**分块（一个合并区间 =
-     一个场景，区间覆盖的行是它的排障步骤）；
-  2. 体检：ragIndex 是命令的稳定编号，重号会让命令查不准，解析阶段就报出来；
-  3. 改写：每个场景一次模型调用，产出一篇完整 skill；
+  1. 解析 xlsx：XLSX_PATH 指向目录时处理其下**全部**工作簿，指向单个文件就只处理它；
+     每个工作簿遍历所有 sheet；一个 sheet 多个场景，靠首列的**合并单元格**分块
+     （一个合并区间 = 一个场景，区间覆盖的行是它的排障步骤）；
+  2. 体检：ragIndex 重号、步骤编号不连续、多个场景撞同一个输出路径，解析阶段就报出来；
+  3. 改写：每个场景一次模型调用，产出一篇完整 skill；校验没过时把原因回传给模型再改；
   4. 校验 + 报告：格式不合规的不落盘，只记进报告。
 
 用法：
-  python3 excel_skill_distill_pipeline.py --check    # 只解析和体检，不调模型
-  python3 excel_skill_distill_pipeline.py            # 按文件末尾 main() 的默认参数运行
+  python3 excel_skill_distill_pipeline.py --check              # 只解析和体检，不调模型
+  python3 excel_skill_distill_pipeline.py                      # 按文件末尾 main() 的默认参数运行
+  python3 excel_skill_distill_pipeline.py --validate <skill.md> # 单独校验已有的skill文件
 """
 import json
 import os
@@ -186,25 +188,74 @@ def parse_rag_index(raw: str) -> tuple:
     return int(match.group(1)), match.group(2).strip()
 
 
+def find_workbooks(path: str) -> list:
+    """path 是单个 xlsx 就返回它；是目录就返回目录下所有 xlsx。
+
+    跳过 `~$` 开头的文件——那是 Excel 打开时生成的锁文件，不是真表格，
+    读它会报格式错。
+    """
+    if os.path.isfile(path):
+        return [path]
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f"步骤表不存在: {path}")
+    files = sorted(
+        os.path.join(path, name) for name in os.listdir(path)
+        if name.endswith((".xlsx", ".xlsm")) and not name.startswith("~$"))
+    if not files:
+        raise FileNotFoundError(f"{path} 下没有找到 .xlsx 文件")
+    return files
+
+
+def load_scenarios(path: str, sheet_name: str = None) -> list:
+    """把一个或一批步骤表解析成场景列表，每个场景带上它来自哪个文件。"""
+    scenarios = []
+    for workbook in find_workbooks(path):
+        for scenario in parse_sheet(workbook, sheet_name):
+            scenario["source"] = workbook
+            scenarios.append(scenario)
+    if not scenarios:
+        raise ValueError(f"{path} 里没有解析到任何故障场景")
+    return scenarios
+
+
 def parse_sheet(xlsx_path: str, sheet_name: str = None) -> list:
     """解析排障步骤表，返回场景列表。
 
     一个 sheet 放多个场景，靠首列分块：首列非空的行是一个场景的开始，到下一个
     首列非空的行之前都属于这个场景。合并单元格天然满足这个规则（openpyxl 里
     合并区间只有左上角那一格有值），单步场景没有合并区间也照样能切。
+
+    不指定 sheet_name 时**遍历所有 sheet**：一个工作簿按协议分几个 sheet 是常态，
+    只读第一个会静默漏掉其余的。整个 sheet 首列全空（说明那是说明页、封面之类）
+    时跳过，不当成错误。
     """
     from openpyxl import load_workbook
 
     wb = load_workbook(xlsx_path, data_only=True)
-    ws = wb[sheet_name] if sheet_name else wb[wb.sheetnames[0]]
+    if sheet_name:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"{xlsx_path} 里没有名为 {sheet_name!r} 的 sheet"
+                             f"（现有：{'、'.join(wb.sheetnames)}）")
+        sheets = [wb[sheet_name]]
+    else:
+        sheets = [wb[name] for name in wb.sheetnames]
 
+    scenarios = []
+    for ws in sheets:
+        scenarios += _parse_worksheet(ws, xlsx_path)
+    if not scenarios:
+        raise ValueError(
+            f"{xlsx_path} 里没有解析到任何场景：首列（排障目标）全为空。"
+            f"一个场景的所有步骤行要用合并单元格圈起来，"
+            f"或至少在该场景第一行的首列写上排障目标。")
+    return scenarios
+
+
+def _parse_worksheet(ws, xlsx_path: str) -> list:
     starts = [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
               if _cell(ws, row, COL_GOAL)]
     if not starts:
-        raise ValueError(
-            f"{xlsx_path} 的 sheet {ws.title!r} 里没有解析到任何场景："
-            f"首列（排障目标）全为空。一个场景的所有步骤行要用合并单元格圈起来，"
-            f"或至少在该场景第一行的首列写上排障目标。")
+        return []      # 说明页/封面这类没有场景的 sheet，跳过
 
     scenarios = []
     for i, start in enumerate(starts):
@@ -238,6 +289,7 @@ def parse_sheet(xlsx_path: str, sheet_name: str = None) -> list:
             "steps": steps,
             "rows": (start, end),
             "sheet": ws.title,
+            "source": xlsx_path,
         })
     return scenarios
 
@@ -329,16 +381,50 @@ def collect_parameters(scenario: dict) -> list:
     return params
 
 
+def _safe_name(text: str) -> str:
+    return re.sub(r"[/\\:*?\"<>|]", "_", text or "").strip()
+
+
 def derive_skill_path(scenario: dict, category: str = DEFAULT_CATEGORY) -> str:
     """从告警名推出 skill 相对路径。
 
     交给模型编路径会让同一张表重跑生成不同文件名，所以这里用确定性规则定死。
+
+    category 传 None 时按**工作簿文件名**分目录——批量处理 excel_cases/ 下多个
+    表格时，这样一个表格一个目录，也顺带避开不同表格里同名场景撞车。
     """
     if scenario["name"] in SCENARIO_PATH_OVERRIDES:
         return SCENARIO_PATH_OVERRIDES[scenario["name"]]
-    base = re.sub(r"[/\\:*?\"<>|]", "_", scenario["name"]).strip()
+    base = _safe_name(scenario["name"])
     base = re.sub(r"(告警|事件)$", "", base).strip() or "未命名场景"
+    if category is None:
+        source = scenario.get("source") or ""
+        category = _safe_name(os.path.splitext(os.path.basename(source))[0]) \
+            or DEFAULT_CATEGORY
     return f"{category}/{base}.md"
+
+
+def audit_skill_paths(scenarios: list, category: str) -> list:
+    """不同场景推出同一个路径时报出来。
+
+    批量处理多个表格时这是真会发生的：两个表格里都有"BFD状态异常"，推出来是同一个
+    文件名，后写的会把先写的整篇覆盖掉，而且悄无声息。撞了就报出来，让人用
+    SCENARIO_PATH_OVERRIDES 钉死，或者改成按文件名分目录（CATEGORY=None）。
+    """
+    by_path = {}
+    for scenario in scenarios:
+        by_path.setdefault(derive_skill_path(scenario, category), []).append(scenario)
+    issues = []
+    for path, group in sorted(by_path.items()):
+        if len(group) > 1:
+            detail = "；".join(
+                f"{s['name']}（{os.path.basename(s.get('source') or '?')} "
+                f"sheet {s['sheet']} 第{s['rows'][0]}行）" for s in group)
+            issues.append(
+                f"{len(group)} 个场景推出了同一个路径 `{path}`：{detail}。"
+                f"后生成的会覆盖先生成的——请用 SCENARIO_PATH_OVERRIDES 指定路径，"
+                f"或把 CATEGORY 设为 None 按工作簿文件名分目录")
+    return issues
 
 
 def format_scenario(scenario: dict) -> str:
@@ -1022,23 +1108,36 @@ def main(XLSX_PATH, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
     print(f"输出目录: {OUTPUT_DIR}")
     print(f"模型: {MODEL_NAME}")
 
-    if not os.path.isfile(XLSX_PATH):
-        print(f"错误: 步骤表不存在: {XLSX_PATH}")
+    try:
+        workbooks = find_workbooks(XLSX_PATH)
+        scenarios = load_scenarios(XLSX_PATH, SHEET_NAME)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"错误: {e}")
         sys.exit(1)
 
-    scenarios = parse_sheet(XLSX_PATH, SHEET_NAME)
-    print(f"\n解析出 {len(scenarios)} 个故障场景:")
+    print(f"\n找到 {len(workbooks)} 个步骤表，解析出 {len(scenarios)} 个故障场景:")
     audit = []
+    current_source = None
     for scenario in scenarios:
+        if scenario["source"] != current_source:
+            current_source = scenario["source"]
+            print(f"\n  {current_source}")
         skill_path = derive_skill_path(scenario, CATEGORY)
-        print(f"  ● {scenario['name']}（sheet {scenario['sheet']} "
+        print(f"    ● {scenario['name']}（sheet {scenario['sheet']} "
               f"第{scenario['rows'][0]}-{scenario['rows'][1]}行，"
               f"{len(scenario['steps'])} 步）→ {skill_path}")
         issues = audit_commands(scenario) + audit_step_numbers(scenario)
         if issues:
             audit.append((scenario["name"], issues))
             for issue in issues:
-                print(f"      [WARN] {issue}")
+                print(f"        [WARN] {issue}")
+
+    # 多个表格一起处理时，不同场景可能推出同一个输出路径，后者会覆盖前者
+    path_issues = audit_skill_paths(scenarios, CATEGORY)
+    for issue in path_issues:
+        print(f"\n  [WARN] {issue}")
+    if path_issues:
+        audit.append(("输出路径冲突", path_issues))
 
     if audit:
         print(f"\n[WARN] {sum(len(i) for _, i in audit)} 处步骤表问题，"
@@ -1091,7 +1190,7 @@ def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
     正文、或想确认某篇老skill合不合新规范）就需要这个入口。
     命令是否齐全要对着步骤表比，所以仍要读表。
     """
-    scenarios = parse_sheet(xlsx_path, sheet_name)
+    scenarios = load_scenarios(xlsx_path, sheet_name)
     by_path = {derive_skill_path(s): s for s in scenarios}
     failures = 0
     for path in paths:
@@ -1113,6 +1212,10 @@ def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
     return 1 if failures else 0
 
 
+# 步骤表的默认位置：目录下所有 xlsx 都会被处理；只想跑其中一个时把它指到那个文件
+XLSX_DIR = "excel_cases"
+
+
 if __name__ == "__main__":
     # --validate <文件…>：单独校验已有的skill文件，不调模型
     if "--validate" in sys.argv[1:]:
@@ -1120,10 +1223,10 @@ if __name__ == "__main__":
         if not targets:
             print("用法: python3 excel_skill_distill_pipeline.py --validate <skill.md> [更多文件…]")
             sys.exit(2)
-        sys.exit(validate_files(targets, "excel_cases/排障步骤表.xlsx"))
+        sys.exit(validate_files(targets, XLSX_DIR))
 
     main(
-        XLSX_PATH="excel_cases/排障步骤表.xlsx",
+        XLSX_PATH=XLSX_DIR,
         OUTPUT_DIR=f"skills_from_excel/{datetime.now().strftime('%m-%d')}",
         # 地址与密钥从 .env 按模型名解析（见 model_config.py）
         API_URL=None,
@@ -1135,7 +1238,10 @@ if __name__ == "__main__":
         MODEL_NAME="qwen3.6-27b",
         WORKERS=3,
         REPORT_PATH=f"reports/excel_skill_report_{datetime.now().strftime('%m-%d')}.md",
+        # 留空表示遍历工作簿里的所有 sheet
         SHEET_NAME=None,
+        # 一级目录。所有场景堆进同一个目录；改成 None 则按工作簿文件名分目录，
+        # 表格多起来之后更好找，也能避开不同表格里同名场景撞路径。
         CATEGORY=DEFAULT_CATEGORY,
         DRY_RUN=True,
         # 加 --check 只解析和体检，不调模型
