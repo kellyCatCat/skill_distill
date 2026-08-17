@@ -173,6 +173,29 @@ def _cell(ws, row: int, col: int) -> str:
     return str(value).strip()
 
 
+# 填表人用来表示"这格没内容"的写法。整格**恰好**等于其中之一才算占位符：
+# "NA，人工远程修复"这类带了说明的仍然是有效内容，不能一并清掉。
+#
+# 为什么必须处理：`命令行`列写 NA 表示这步不发命令，而校验器会把每个非空的命令格
+# 都当成"必须出现在正文里的命令"，于是要求模型输出一条叫 NA 的命令——它做不到，
+# 三次重试全废（PTP 那批表就是这么整批失败的）。
+CELL_PLACEHOLDERS = {
+    "na", "n/a", "n.a.", "none", "null", "nil", "-", "--", "—", "–", "/", "\\",
+    "无", "空", "不涉及", "不适用", "无需", "暂无", "略",
+}
+
+
+def _optional_cell(ws, row: int, col: int) -> str:
+    """读那些「可以为空」的列，占位符按空处理。
+
+    只用于命令行/回显/修复建议/影响性/修复验证/ragIndex 这几列。排障目标、
+    步骤编号、步骤描述不走这里——那几列填了占位符本身就是表的问题，
+    悄悄抹成空会把问题藏起来。
+    """
+    text = _cell(ws, row, col)
+    return "" if text.lower() in CELL_PLACEHOLDERS else text
+
+
 RAG_INDEX_PATTERN = re.compile(r"^\s*(\d+)\s*[：:、.,]\s*(.*)$")
 
 
@@ -262,11 +285,13 @@ def _parse_worksheet(ws, xlsx_path: str) -> list:
         end = starts[i + 1] - 1 if i + 1 < len(starts) else ws.max_row
         steps = []
         for row in range(start, end + 1):
-            # 整行都空的尾行（Excel 常留空行）跳过
-            if not any(_cell(ws, row, col) for col in
-                       (COL_STEP_NO, COL_STEP_DESC, COL_STEP_DETAIL, COL_COMMAND)):
+            # 整行都空的尾行（Excel 常留空行）跳过。命令列按占位符规则读，
+            # 免得只写了个 NA 的空行被当成一个步骤。
+            if not any((_cell(ws, row, col) for col in
+                        (COL_STEP_NO, COL_STEP_DESC, COL_STEP_DETAIL))) \
+                    and not _optional_cell(ws, row, COL_COMMAND):
                 continue
-            rag_no, rag_purpose = parse_rag_index(_cell(ws, row, COL_RAG_INDEX))
+            rag_no, rag_purpose = parse_rag_index(_optional_cell(ws, row, COL_RAG_INDEX))
             steps.append({
                 "row": row,
                 "no": _cell(ws, row, COL_STEP_NO),
@@ -274,12 +299,12 @@ def _parse_worksheet(ws, xlsx_path: str) -> list:
                 "detail": _cell(ws, row, COL_STEP_DETAIL),
                 "rag_no": rag_no,
                 "rag_purpose": rag_purpose,
-                "rag_raw": _cell(ws, row, COL_RAG_INDEX),
-                "command": _cell(ws, row, COL_COMMAND),
-                "echo": _cell(ws, row, COL_ECHO),
-                "fix": _cell(ws, row, COL_FIX),
-                "impact": _cell(ws, row, COL_IMPACT),
-                "verify": _cell(ws, row, COL_VERIFY),
+                "rag_raw": _optional_cell(ws, row, COL_RAG_INDEX),
+                "command": _optional_cell(ws, row, COL_COMMAND),
+                "echo": _optional_cell(ws, row, COL_ECHO),
+                "fix": _optional_cell(ws, row, COL_FIX),
+                "impact": _optional_cell(ws, row, COL_IMPACT),
+                "verify": _optional_cell(ws, row, COL_VERIFY),
             })
         goal = _cell(ws, start, COL_GOAL)
         scenarios.append({
@@ -396,6 +421,9 @@ def derive_skill_path(scenario: dict, category: str = DEFAULT_CATEGORY) -> str:
     if scenario["name"] in SCENARIO_PATH_OVERRIDES:
         return SCENARIO_PATH_OVERRIDES[scenario["name"]]
     base = _safe_name(scenario["name"])
+    # "告警：P/E不一致告警hwPtpPortAttrMisMatch" 这种开头的"告警："是个标签，
+    # 不是名字的一部分，去掉之后文件名才好认
+    base = re.sub(r"^(告警|故障|事件)\s*[：:]\s*", "", base).strip()
     base = re.sub(r"(告警|事件)$", "", base).strip() or "未命名场景"
     if category is None:
         source = scenario.get("source") or ""
