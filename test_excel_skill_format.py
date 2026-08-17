@@ -16,7 +16,8 @@
 import re
 import sys
 
-from excel_skill_distill_pipeline import check_skill_format, parse_sheet
+from excel_skill_distill_pipeline import (check_hardcoded_operands,
+                                          check_skill_format, parse_sheet)
 
 SAMPLE_PATH = "excel_cases/sample_skill.md"
 
@@ -66,14 +67,21 @@ CASES = [
     ("修复CLI写死了segment-list名",
      GOOD + "\n```\nundo segment-list list1\n```\n", "写成了具体值"),
     # 表里只给"BGP视图下配置ipv6-family sr-policy"一句描述，模型展开成CLI时
-    # 会顺手编出入参列表里没有的参数——这是"CLI是编的"最可靠的信号
-    ("编造的修复CLI带出未申报的参数",
+    # 会编出表里没有的命令
+    ("编造的修复CLI",
      variant("BGP 视图下配置 `ipv6-family sr-policy`",
              "在 BGP 视图下启用地址族：<br>`bgp <as-number>`<br>"
              "`ipv6-family sr-policy`<br>`peer <peer-ip> enable`"),
+     "在步骤表里没有出现过"),
+    # 从回显里抄配置同样要拦：这几行只在回显列出现过，不是命令来源
+    ("从回显抄来的配置行",
+     GOOD + "\n```\nbgp route-learning acceleration enable\n```\n",
+     "在步骤表里没有出现过"),
+    # 命令本身在表里，但参数没申报——用户无处填，agent 也拿不到
+    ("命令在表里但参数没申报",
+     variant("`display bfd session srv6-segment-list <segment-list-id>`",
+             "`display bfd session srv6-segment-list <bfd-session-id>`", count=99),
      "入参列表里没有对应行"),
-    ("子关键字不误判",
-     GOOD + "\n```\nbgp route-learning acceleration enable\n```\n", ""),
 
     # ---- 把问题转出去的兜底措辞 ----
     ("写了转人工的兜底",
@@ -87,10 +95,10 @@ CASES = [
      variant("   - 采集内容：是否存在 `ipv6-family sr-policy` 地址族及其 peer 使能情况。",
              "   - 采集内容：若地址族缺失则跳转步骤 3。"),
      "前置检查必须是线性执行"),
+    # 换成一条表里真有、但参数是选填的命令：前置检查只能用必填项
     ("前置检查用了非必填参数",
-     variant("   - CLI 命令：" + PRECHECK_CMD,
-             "   - CLI 命令：`display srv6-te policy endpoint <endpoint-ipv6> "
-             "color <color-id> segment-list <segment-list-id>`"),
+     variant(PRECHECK_BGP,
+             "   - CLI 命令：`display bfd session srv6-segment-list <segment-list-id>`"),
      "不可以超出入参列表"),
 
     # ---- 根因：步骤表写明的根因、正文、对照表三者要对得上 ----
@@ -114,8 +122,29 @@ CASES = [
 ]
 
 
+# 单独直查的用例：这些分支在 check_skill_format 里会被更早的检查抢先命中，
+# 但分支本身的行为仍要验（否则改动它时没人发现）。
+DIRECT_CASES = [
+    # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
+    ("子关键字不当成写死的值", check_hardcoded_operands,
+     ("```\nbgp route-learning acceleration enable\n```",), ""),
+    ("实例名当成写死的值", check_hardcoded_operands,
+     ("```\nbgp 100\n```",), "写成了具体值"),
+]
+
+
 def run() -> int:
     failures = 0
+    for name, func, args, expect in DIRECT_CASES:
+        got = func(*args)
+        ok = (got == "") if expect == "" else (expect in got)
+        if not ok:
+            failures += 1
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+        if got:
+            print(f"        → {got}")
+        if not ok:
+            print(f"        期望包含: {expect!r}")
     for name, content, expect in CASES:
         got = check_skill_format(content, scenario)
         ok = (got == "") if expect == "" else (expect in got)
@@ -126,7 +155,8 @@ def run() -> int:
             print(f"        → {got}")
         if not ok:
             print(f"        期望包含: {expect!r}")
-    print(f"\n{len(CASES) - failures}/{len(CASES)} 通过")
+    total = len(CASES) + len(DIRECT_CASES)
+    print(f"\n{total - failures}/{total} 通过")
     return failures
 
 

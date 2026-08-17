@@ -72,8 +72,9 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 回显不要整段照搬，但**判据依赖的字段名必须原样保留并用反引号标出**（如 `Policy State`、`List State`、`Verification State`、`BFD State`），agent 要靠这些字段名在回显里定位。字段的取值同样照写（如 `Down (Shutdown)`、`Down (Overrun)`、`SID Unreachable`）。
 - 表里"修复建议影响性"列的内容（如影响大需要仿真验证）写进该修复方案的影响性说明，**不要写成排查步骤**——仿真是交给人的风险提示，agent 执行不了。
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
-- 只写表里给出的信息。表没给的 HTTP 方法、参数、命令一律不要自己编。表里只写了"减少policy数量"这种没有具体命令的修复方向时，就照实写方向，**不要编出一条 CLI 来**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。
-- **修复CLI里禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成 `<as-number>`、`<policy-name>`、`<segment-list-name>` 这样的参数。回显只用来说明"该看哪个字段"，不是配置模板。
+- **只能使用步骤表里出现过的 CLI，一条都不许自己生成。** 可用的命令来源只有「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列；**「回显」列不算命令来源**——它是某台设备当时的输出，不是配置模板。表里只写了"减少policy数量""BGP视图下配置ipv6-family sr-policy"这种没有具体命令的修复方向时，就照实写这句方向，**不要补全成可执行的配置序列**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。表里那一格是空的，就写"无直接修复CLI"并说明只能定位。
+- **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成 `<as-number>`、`<policy-name>`、`<segment-list-name>` 这样的参数。回显只用来说明"该看哪个字段"。
+- **正文里出现的每个 `<参数>` 都必须在入参列表里有对应行**。冒出没申报的参数，基本就说明那条CLI是编的——用户无处填，agent 也拿不到。
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
 
 
@@ -674,6 +675,48 @@ def known_commands(scenario: dict) -> set:
     return known
 
 
+# 命令的来源只认这四列，**回显列不算**。回显是某台设备当时的输出，里面有
+# `bgp 100`、`peer 1::2 enable`、`segment-list 1`——把它当命令来源，等于给
+# "照着回显编一段配置"开了后门，而那正是要拦的东西。
+COMMAND_SOURCE_FIELDS = ("command", "fix", "verify", "detail")
+
+# 像命令的行内代码：首个词全小写、且整段带空格。
+# 判据字段与取值也用反引号标（`Policy State`、`Up`、`Down (Shutdown)`、
+# `SID Unreachable`），它们首字母大写，靠这一点区分开。
+COMMAND_LIKE = re.compile(r"^[a-z][a-z0-9._-]*\s")
+
+
+def source_command_text(scenario: dict) -> str:
+    """步骤表里所有可以当作命令来源的文字，归一化后拼成一大串。"""
+    parts = []
+    for step in scenario["steps"]:
+        for field in COMMAND_SOURCE_FIELDS:
+            parts.append(step.get(field) or "")
+    return _normalize_command(" \n ".join(parts))
+
+
+def check_commands_from_source(content: str, scenario: dict) -> str:
+    """正文里的每条 CLI 都必须在步骤表里出现过，不许自己生成。
+
+    查询命令由 check_unknown_commands 单独比对（那边按整条命令比，更严）；
+    这里覆盖配置命令——`undo shutdown`、`ipv6-family sr-policy` 这类。
+    """
+    corpus = source_command_text(scenario)
+    for raw in cli_lines(content):
+        if not COMMAND_LIKE.match(raw.strip()):
+            continue
+        normalized = _normalize_command(raw)
+        # 单个词（如去掉参数后只剩 `bgp`）太泛，比中了也说明不了什么；
+        # 这类由"参数必须申报"那道检查兜住
+        if not normalized or " " not in normalized:
+            continue
+        if normalized not in corpus:
+            return (f"CLI `{raw.strip()}` 在步骤表里没有出现过——只能使用源文档里"
+                    f"给出的命令，不要自己生成。表里只给了修复方向没给命令时，"
+                    f"照实写方向即可")
+    return ""
+
+
 def check_hardcoded_operands(content: str) -> str:
     """修复CLI里不许出现从样例回显抄来的具体对象名/编号。"""
     for raw in cli_lines(content):
@@ -767,6 +810,9 @@ def check_skill_format(content: str, scenario: dict) -> str:
     if error:
         return error
     error = check_unknown_commands(content, scenario)
+    if error:
+        return error
+    error = check_commands_from_source(content, scenario)
     if error:
         return error
 
