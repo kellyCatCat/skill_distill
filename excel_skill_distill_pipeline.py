@@ -889,6 +889,41 @@ def make_extractor(scenario: dict):
     return _extractor
 
 
+REPAIR_SUFFIX = """
+
+# 上一次的输出没有通过校验，请改掉后重新输出
+
+上一次你的输出被格式校验拦下了，原因是：
+
+    <error>
+
+请**针对这条原因**修改，然后重新输出完整的 json 代码块 + markdown 代码块。注意：
+- 要输出**完整的 skill 全文**，不要只输出改动的那一段；
+- 其余已经正确的内容保持原样，不要顺手改别处；
+- 如果原因是"命令在步骤表里没有出现过"或"参数没有对应行"，正确的做法通常是**删掉那条自己编的命令**，改成照实写步骤表给的修复方向，而不是再编一条。
+"""
+
+
+def _clean_error(error: str) -> str:
+    """把 call_model_with_retry 包装过的错误还原成校验器的原话。
+
+    它会加上"未知错误: "前缀和"(尝试 1/3)"后缀，还会附上提取到的内容开头——
+    这些是给人看日志用的，塞进 prompt 只会分散模型注意力。
+    """
+    text = re.sub(r"^未知错误[:：]\s*", "", str(error or "")).strip()
+    text = re.sub(r"\s*\(尝试 \d+/\d+\)\s*$", "", text)
+    return re.sub(r"；提取到的内容开头:.*$", "", text, flags=re.DOTALL).strip()
+
+
+def repair_prompt(question: str, error: str) -> str:
+    """校验没过时，把原因告诉模型再让它改。
+
+    默认的重试是把同一份 prompt 再发一遍，模型不知道自己哪儿错了，只能靠随机性
+    碰运气——对 qwen 这档模型尤其浪费。带上原因它才知道要改什么。
+    """
+    return question + REPAIR_SUFFIX.replace("<error>", _clean_error(error))
+
+
 def convert_scenario(args: tuple) -> dict:
     scenario, skill_path, api_url, model_name, max_tokens, timeout = args
     prompt = (PROMPT_TEMPLATE
@@ -902,7 +937,8 @@ def convert_scenario(args: tuple) -> dict:
               "steps": len(scenario["steps"]), "rows": scenario["rows"]}
     reply = call_model_with_retry(api_url, model_name, prompt,
                                   extractor=make_extractor(scenario),
-                                  max_tokens=max_tokens, timeout=timeout)
+                                  max_tokens=max_tokens, timeout=timeout,
+                                  retry_prompt=repair_prompt)
     if reply.startswith("错误："):
         result["error"] = reply
         return result

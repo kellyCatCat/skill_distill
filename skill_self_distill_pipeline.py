@@ -158,7 +158,7 @@ def extract_markdown_content(text: str) -> str:
 def call_model_with_retry(api_url: str, model_name: str, question: str, max_retries: int = 3,
                           retry_delay: float = 1.0, extractor=extract_markdown_content,
                           temperature: float = 0.4, max_tokens: int = None,
-                          timeout: int = 300) -> str:
+                          timeout: int = 300, retry_prompt=None) -> str:
     """extractor 从模型回复中提取有效内容，返回空串表示本次回复无效需重试。
 
     temperature 默认0.4适合写作类调用；分类判断类调用（如把案例归到哪个skill）
@@ -166,7 +166,12 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
 
     地址、密钥、是否开思考、输出预算按 model_name 从 model_config 解析（见 .env）；
     api_url 显式传入时优先，max_tokens 显式传入时覆盖该模型的默认预算——评测优化
-    要整篇重写skill，比其它调用更吃输出预算。"""
+    要整篇重写skill，比其它调用更吃输出预算。
+
+    retry_prompt(原问题, 上次的错误说明) -> 新问题：内容校验失败时用它重写提问，
+    把"哪儿不合规"告诉模型再让它改。不传就是原来的行为——把同一份prompt再发一遍，
+    模型不知道自己错在哪，只能靠随机性碰运气。只在**内容**不合规时生效；超时、
+    连接失败这类传输问题重发原问题即可，把网络错误塞进prompt没有意义。"""
     cfg = resolve_model(model_name, api_url)
     payload = {
         "model": model_name,
@@ -182,7 +187,12 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
     headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else None
 
     last_error = None
+    content_invalid = False    # 上次失败是不是"内容不合规"（而非网络问题）
     for attempt in range(max_retries):
+        # 上一轮是内容问题且给了改写函数时，带着错误说明重新提问
+        if content_invalid and retry_prompt:
+            payload["messages"] = [
+                {"role": "user", "content": retry_prompt(question, last_error)}]
         try:
             response = requests.post(
                 cfg["api_url"],
@@ -251,12 +261,17 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
 
         except requests.exceptions.Timeout:
             last_error = f"请求超时 (尝试 {attempt + 1}/{max_retries})"
+            content_invalid = False
         except requests.exceptions.ConnectionError:
             last_error = f"连接失败 (尝试 {attempt + 1}/{max_retries})"
+            content_invalid = False
         except requests.exceptions.HTTPError as e:
             last_error = f"HTTP错误: {e.response.status_code} (尝试 {attempt + 1}/{max_retries})"
+            content_invalid = False
         except Exception as e:
             last_error = f"未知错误: {str(e)} (尝试 {attempt + 1}/{max_retries})"
+            # 走到这里的多半是 extractor 抛的校验失败，带着原因重问才有意义
+            content_invalid = True
 
         if attempt < max_retries - 1:
             import time

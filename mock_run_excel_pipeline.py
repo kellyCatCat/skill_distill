@@ -13,10 +13,12 @@
      跑这条是为了确认流被拼回来之后与普通JSON路径逐字一致、中文不乱码）
   C. 违规回复（命令没用反引号、参数是花括号）——必须被 extractor 拦住并重试到失败，
      且一个文件都不许写出去
+  D. 先违规后合规——校验失败时要把原因回传给模型（而不是把同一份prompt再发一遍），
+     第二次通过
 
 用法：
-  python3 mock_run_excel_pipeline.py           # 三种都跑
-  python3 mock_run_excel_pipeline.py json|sse|bad
+  python3 mock_run_excel_pipeline.py           # 四种都跑
+  python3 mock_run_excel_pipeline.py json|sse|bad|repair
 """
 import json
 import os
@@ -124,6 +126,51 @@ def skill_body(report_path: str) -> str:
     return match.group(1) if match else ""
 
 
+def check_repair_loop() -> list:
+    """校验失败时，第二次提问要带上失败原因，让模型照着改。
+
+    直接走 call_model_with_retry，不经 Pool——要观察发出去的 prompt，而 Pool
+    fork 之后子进程记的东西传不回来。
+    """
+    print("\n" + "#" * 72)
+    print("# D. 校验失败 → 带着原因重问 → 第二次通过")
+    print("#" * 72)
+
+    seen = []
+    replies = iter([BAD_REPLY, GOOD_REPLY])
+
+    def fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        seen.append(json["messages"][0]["content"])
+        return FakeResponse(next(replies), False)
+
+    distill.requests.post = fake_post
+    scenario = pipeline.parse_sheet(XLSX_PATH)[0]
+    result = distill.call_model_with_retry(
+        MOCK_URL, "qwen3.6-27b", "原始提问",
+        extractor=pipeline.make_extractor(scenario),
+        retry_prompt=pipeline.repair_prompt, retry_delay=0)
+
+    failures = []
+    if result.startswith("错误："):
+        failures.append(f"D 第二次应当成功，实际: {result[:80]}")
+    if len(seen) != 2:
+        failures.append(f"D 应当只发两次请求，实际 {len(seen)} 次")
+    if len(seen) > 1:
+        if "没有通过校验" not in seen[1]:
+            failures.append("D 第二次的prompt没有带上“上一次没通过校验”的说明")
+        if "没有以行内代码" not in seen[1]:
+            failures.append("D 第二次的prompt没有带上具体的失败原因")
+        if seen[1] == seen[0]:
+            failures.append("D 第二次发的还是同一份prompt，没有把原因回传")
+        print(f"  第一次prompt: {seen[0]!r}")
+        tail = seen[1][len(seen[0]):].strip().splitlines()
+        print("  第二次追加的内容:")
+        for line in tail[:8]:
+            print(f"    {line}")
+    print(f"\n>>> D: {'通过' if not failures else '不通过'}")
+    return failures
+
+
 def main(which: str):
     workdir = tempfile.mkdtemp(prefix="mock-excel-")
     failures = []
@@ -151,6 +198,9 @@ def main(which: str):
             if skill_body(report):
                 failures.append("C 违规回复不该产出可落盘的内容")
 
+        if which in ("all", "repair"):
+            failures += check_repair_loop()
+
         if "json" in bodies and "sse" in bodies:
             if bodies["json"] != bodies["sse"]:
                 failures.append("SSE拼回的正文与普通JSON路径不一致")
@@ -162,8 +212,8 @@ def main(which: str):
             for item in failures:
                 print(f"[FAIL] {item}")
         else:
-            print("[OK] 三种情形均符合预期："
-                  "合规回复能产出skill，SSE与JSON逐字一致，违规回复被拦下且未落盘")
+            print("[OK] 四种情形均符合预期：合规回复能产出skill，SSE与JSON逐字一致，"
+                  "违规回复被拦下且未落盘，校验失败会带着原因重问并在第二次通过")
         return 1 if failures else 0
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
