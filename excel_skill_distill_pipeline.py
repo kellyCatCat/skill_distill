@@ -76,7 +76,8 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 表里"修复建议影响性"列的内容（如影响大需要仿真验证）写进该修复方案的影响性说明，**不要写成排查步骤**——仿真是交给人的风险提示，agent 执行不了。
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
 - **只能使用步骤表里出现过的 CLI，一条都不许自己生成。** 可用的命令来源只有「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列；**「回显」列不算命令来源**——它是某台设备当时的输出，不是配置模板。表里只写了"减少policy数量""BGP视图下配置ipv6-family sr-policy"这种没有具体命令的修复方向时，就照实写这句方向，**不要补全成可执行的配置序列**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。表里那一格是空的，就写"无直接修复CLI"并说明只能定位。
-- **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成 `<as-number>`、`<policy-name>`、`<segment-list-name>` 这样的参数。回显只用来说明"该看哪个字段"。
+- **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成参数。回显只用来说明"该看哪个字段"。
+- **参数名沿用步骤表里的写法，不要翻译**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。
 - **正文里出现的每个 `<参数>` 都必须在入参列表里有对应行**。冒出没申报的参数，基本就说明那条CLI是编的——用户无处填，agent 也拿不到。
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
 
@@ -789,6 +790,17 @@ def _normalize_command(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>\n]*>", "", text)).strip().lower()
 
 
+def step_commands(step: dict) -> list:
+    """一格里可能写了不止一条命令，逐行拆开。
+
+    实际的表就有这种写法：`命令行`格里写 `interface <端口>` 换行 `display this`，
+    那是要连着敲的两条命令。整格当一条比对，就会要求正文里出现一段带换行的
+    "命令"——模型不可能那么写，于是三次重试全废。
+    """
+    return [line.strip() for line in (step.get("command") or "").splitlines()
+            if line.strip()]
+
+
 def known_commands(scenario: dict) -> set:
     """步骤表里出现过的查询命令（命令行列 + 修复建议列 + 修复验证列）。"""
     known = set()
@@ -905,14 +917,13 @@ def check_skill_format(content: str, scenario: dict) -> str:
     # SPEC_RES_B 也是，只比前两个词的话模型漏写一条照样能通过。参数名会被改写，
     # 所以只比参数之前的部分。
     for step in scenario["steps"]:
-        if not step["command"]:
-            continue
-        literal = step["command"].split("<")[0].strip()
-        if not literal:
-            continue
-        if not any(literal in span for span in inline_commands(content)):
-            return (f"命令 {step['command']!r} 没有以行内代码（反引号包裹）的形式"
-                    f"出现在正文里")
+        for command in step_commands(step):
+            literal = command.split("<")[0].strip()
+            if not literal:
+                continue
+            if not any(literal in span for span in inline_commands(content)):
+                return (f"命令 {command!r} 没有以行内代码（反引号包裹）的形式"
+                        f"出现在正文里")
 
     # 参数一律 <>，不能留 {} / [] / XXX
     for span in inline_commands(content):
