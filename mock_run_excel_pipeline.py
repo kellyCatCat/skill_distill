@@ -195,8 +195,14 @@ def main(which: str):
                                os.path.join(workdir, "c"))
             if code == 0:
                 failures.append("C 违规回复本应被拦下，却判成了成功")
-            if skill_body(report):
-                failures.append("C 违规回复不该产出可落盘的内容")
+            text = open(report, encoding="utf-8").read()
+            # 失败块里**要**留下最后一次生成的内容（供人工改），但它挂在 `### ` 下，
+            # apply_change_report 只认 `## 新建skill：`，所以落不了盘——这两件事
+            # 要分开验：内容在、且不可落盘。
+            if "## 新建skill：" in text:
+                failures.append("C 违规回复不该产出可落盘的块")
+            if not skill_body(report):
+                failures.append("C 失败时应保留最后一次生成的内容供人工修")
 
         if which in ("all", "repair"):
             failures += check_repair_loop()

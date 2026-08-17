@@ -645,12 +645,13 @@ def _param_declared(param: str, declared: set) -> bool:
     return len(head) >= 3 and any(head in row for row in declared)
 
 
-def check_declared_params(content: str) -> str:
-    """前置检查用到的参数必须是入参列表里的必填项。
+def check_declared_params(content: str, scenario: dict = None) -> str:
+    """入参列表要覆盖正文用到的参数；前置检查更严，只能用其中的必填项。
 
-    只约束前置检查：排查步骤里的参数（如从回显才能拿到的 <segment-list-id>）
-    本来就允许是选填的。
+    只约束前置检查用必填项：排查步骤里的参数（如从回显才能拿到的
+    <segment-list-id>）本来就允许是选填的。
     """
+    scenario_params = collect_parameters(scenario) if scenario else []
     sections = split_sections(content)
     rows = table_rows(sections.get("入参列表", ""))
     if not rows:
@@ -665,12 +666,23 @@ def check_declared_params(content: str) -> str:
     # （"BGP视图下配置ipv6-family sr-policy"），模型容易把它展开成一段CLI，
     # 顺手编出 <as-number>、<peer-ip> 这种表里没有、用户也没处填的参数——
     # 冒出未申报的参数正是"CLI是编的"最可靠的信号。
+    from_sheet = {re.sub(r"[\s\-_]", "", p).lower() for p in scenario_params}
+    listed = "、".join(f"「{row[0]}」" for row in rows) or "（空）"
     for span in cli_lines(content):
         for param in re.findall(r"<([^>\n]+)>", span):
-            if not _param_declared(param, declared):
-                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行——"
-                        f"要么补进入参列表，要么这条CLI是编的（表里只给了修复方向、"
-                        f"没给命令时，照实写方向即可）")
+            if _param_declared(param, declared):
+                continue
+            # 表里本来就有这个参数 → 该补进入参列表；表里没有 → 这条CLI是编的。
+            # 两种情况改法相反，不说清楚模型会往错的方向修。
+            if _param_declared(param, from_sheet):
+                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行。"
+                        f"这个参数在步骤表的命令里就有，**把它补进入参列表**——"
+                        f"能由用户/告警提供的填「是」，只能从前面步骤的回显里取的填「否」"
+                        f"并注明来自哪一步。当前入参列表只有：{listed}")
+            return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行，"
+                    f"步骤表里也没有这个参数——说明这条CLI是自己编的，"
+                    f"**删掉它**，照实写步骤表给的修复方向即可。"
+                    f"当前入参列表只有：{listed}")
     for span in INLINE_CODE.findall(sections.get("前置检查", "")):
         for param in re.findall(r"<([^>\n]+)>", span):
             key = re.sub(r"[\s\-_]", "", param).lower()
@@ -930,10 +942,13 @@ def check_skill_format(content: str, scenario: dict) -> str:
     if error:
         return error
 
-    for check in (check_structure, check_precheck_linear, check_declared_params):
+    for check in (check_structure, check_precheck_linear):
         error = check(content)
         if error:
             return error
+    error = check_declared_params(content, scenario)
+    if error:
+        return error
 
     error = check_root_causes(content, scenario)
     if error:
@@ -988,14 +1003,21 @@ def prepare_content(reply: str) -> tuple:
     return restore_frontmatter(extract_markdown_content(reply))
 
 
-def make_extractor(scenario: dict):
-    """内容不合规时抛异常让 call_model_with_retry 重试，并把原因带进最终报错。"""
+def make_extractor(scenario: dict, holder: dict = None):
+    """内容不合规时抛异常让 call_model_with_retry 重试，并把原因带进最终报错。
+
+    holder 用来留住最后一次尝试的内容。三次都失败时 call_model_with_retry 只返回
+    一句错误说明，模型写的东西就丢了——而那份内容往往只差一两处，人工改一下就能用。
+    留着它，报告里才有东西可审、可手工修。
+    """
     def _extractor(text: str) -> str:
         try:
             extract_json_block(text)
         except (ValueError, json.JSONDecodeError) as e:
             raise ValueError(f"改写说明的json解析失败: {e}")
         content, _ = prepare_content(text)
+        if holder is not None and content:
+            holder["content"] = content
         error = check_skill_format(content, scenario)
         if error:
             raise ValueError(f"{error}；提取到的内容开头: {content[:120]!r}")
@@ -1049,12 +1071,17 @@ def convert_scenario(args: tuple) -> dict:
 
     result = {"scenario": scenario["name"], "skill_path": skill_path,
               "steps": len(scenario["steps"]), "rows": scenario["rows"]}
+    holder = {}
     reply = call_model_with_retry(api_url, model_name, prompt,
-                                  extractor=make_extractor(scenario),
+                                  extractor=make_extractor(scenario, holder),
                                   max_tokens=max_tokens, timeout=timeout,
                                   retry_prompt=repair_prompt)
     if reply.startswith("错误："):
         result["error"] = reply
+        # 留下最后一次的内容：多数失败只差一两处，人工改比整轮重跑快
+        if holder.get("content"):
+            result["content"] = holder["content"]
+            result["needs_manual_fix"] = True
         return result
     try:
         decision = extract_json_block(reply)
@@ -1120,8 +1147,14 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
             lines += [f"### `{r['skill_path']}`", "",
                       f"- 失败原因：{r.get('error') or r['invalid']}"]
             if r.get("content"):
-                lines += ["", "<details><summary>模型生成的内容（供排查）</summary>", "",
-                          "````markdown", r["content"].strip()[:4000], "````", "",
+                # 全文照登、不截断：这份内容多半只差一两处，是拿来人工改的，
+                # 截一半就没法改了。改完把这个块的标题从 "### " 换成
+                # "## 新建skill：" 就能被 apply_change_report.py 落盘。
+                lines += ["", "<details><summary>最后一次生成的内容"
+                          "（改掉上面那条原因后，把本节标题改成 "
+                          "`## 新建skill：` 即可用 apply_change_report.py 落盘）"
+                          "</summary>", "",
+                          "````markdown", r["content"].strip(), "````", "",
                           "</details>", ""]
     return "\n".join(lines) + "\n"
 
