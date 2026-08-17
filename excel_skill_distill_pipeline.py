@@ -515,6 +515,21 @@ def table_rows(section: str) -> list:
     return rows[1:] if rows else []
 
 
+def _param_declared(param: str, declared: set) -> bool:
+    """参数名和入参列表的「信息」列是不是指同一样东西。
+
+    两边写法本来就不一致：参数是英文小写连字符（`<endpoint-ipv6>`），「信息」列是给
+    人看的名字，可能中英混排（「endpoint IPv6」「policy 名称」）。所以先去掉分隔符
+    比对整体，再退一步用参数的首段去比（`<policy-name>` → policy，能对上「policy 名称」）。
+    首段短于3个字符不参与匹配，免得 `<as-number>` 里的 as 到处误命中。
+    """
+    key = re.sub(r"[\s\-_]", "", param).lower()
+    if any(key == row or key in row or row in key for row in declared):
+        return True
+    head = re.split(r"[-_\s]", param)[0].lower()
+    return len(head) >= 3 and any(head in row for row in declared)
+
+
 def check_declared_params(content: str) -> str:
     """前置检查用到的参数必须是入参列表里的必填项。
 
@@ -525,10 +540,22 @@ def check_declared_params(content: str) -> str:
     rows = table_rows(sections.get("入参列表", ""))
     if not rows:
         return "入参列表里没有解析到任何行，需要是三列表格（信息/是否必填/说明）"
+    declared = {re.sub(r"[\s\-_]", "", row[0]).lower() for row in rows}
     required = {re.sub(r"[\s\-_]", "", row[0]).lower()
                 for row in rows if len(row) > 1 and row[1].strip() in ("是", "Y", "yes")}
     if not required:
         return "入参列表里没有任何必填项（「是否必填」列为「是」的行）"
+
+    # 全篇的参数都必须在入参列表里有行。表里的修复常常只给一句描述
+    # （"BGP视图下配置ipv6-family sr-policy"），模型容易把它展开成一段CLI，
+    # 顺手编出 <as-number>、<peer-ip> 这种表里没有、用户也没处填的参数——
+    # 冒出未申报的参数正是"CLI是编的"最可靠的信号。
+    for span in cli_lines(content):
+        for param in re.findall(r"<([^>\n]+)>", span):
+            if not _param_declared(param, declared):
+                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行——"
+                        f"要么补进入参列表，要么这条CLI是编的（表里只给了修复方向、"
+                        f"没给命令时，照实写方向即可）")
     for span in INLINE_CODE.findall(sections.get("前置检查", "")):
         for param in re.findall(r"<([^>\n]+)>", span):
             key = re.sub(r"[\s\-_]", "", param).lower()

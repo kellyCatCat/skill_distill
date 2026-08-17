@@ -61,10 +61,17 @@ CASES = [
      "在步骤表中不存在"),
 
     # ---- 修复CLI里抄了样例回显的具体值 ----
-    ("修复CLI写死了AS号", variant("`bgp <as-number>`", "`bgp 100`"), "写成了具体值"),
+    ("修复CLI写死了AS号",
+     GOOD + "\n```\nbgp 100\n```\n", "写成了具体值"),
     ("修复CLI写死了segment-list名",
-     variant("`segment-list <segment-list-name>`", "`segment-list list1`"),
-     "写成了具体值"),
+     GOOD + "\n```\nundo segment-list list1\n```\n", "写成了具体值"),
+    # 表里只给"BGP视图下配置ipv6-family sr-policy"一句描述，模型展开成CLI时
+    # 会顺手编出入参列表里没有的参数——这是"CLI是编的"最可靠的信号
+    ("编造的修复CLI带出未申报的参数",
+     variant("BGP 视图下配置 `ipv6-family sr-policy`",
+             "在 BGP 视图下启用地址族：<br>`bgp <as-number>`<br>"
+             "`ipv6-family sr-policy`<br>`peer <peer-ip> enable`"),
+     "入参列表里没有对应行"),
     ("子关键字不误判",
      GOOD + "\n```\nbgp route-learning acceleration enable\n```\n", ""),
 
