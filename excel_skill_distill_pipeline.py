@@ -24,6 +24,7 @@
 用法：
   python3 excel_skill_distill_pipeline.py --check              # 只解析和体检，不调模型
   python3 excel_skill_distill_pipeline.py                      # 按文件末尾 main() 的默认参数运行
+  python3 excel_skill_distill_pipeline.py --model qwen3.6-27b  # 临时换模型（默认见 DEFAULT_MODEL）
   python3 excel_skill_distill_pipeline.py --validate <skill.md> # 单独校验已有的skill文件
 """
 import json
@@ -1276,11 +1277,30 @@ def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
 # 步骤表的默认位置：目录下所有 xlsx 都会被处理；只想跑其中一个时把它指到那个文件
 XLSX_DIR = "excel_cases"
 
+# 默认模型。命令行 --model <模型名> 可临时覆盖，比较模型时不用改代码。
+DEFAULT_MODEL = "qwen3.8-27b"
+
+
+def _arg_value(flag: str, argv: list, default: str) -> str:
+    """取 `--flag 值` 或 `--flag=值`，都没有就用默认值。"""
+    for i, arg in enumerate(argv):
+        if arg == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith(flag + "="):
+            return arg.split("=", 1)[1]
+    return default
+
 
 if __name__ == "__main__":
+    MODEL_NAME = _arg_value("--model", sys.argv[1:], DEFAULT_MODEL)
+
     # --validate <文件…>：单独校验已有的skill文件，不调模型
     if "--validate" in sys.argv[1:]:
-        targets = [a for a in sys.argv[1:] if a != "--validate" and not a.startswith("-")]
+        argv = sys.argv[1:]
+        skip = {argv[i + 1] for i, a in enumerate(argv)
+                if a == "--model" and i + 1 < len(argv)}
+        targets = [a for a in argv
+                   if a != "--validate" and not a.startswith("-") and a not in skip]
         if not targets:
             print("用法: python3 excel_skill_distill_pipeline.py --validate <skill.md> [更多文件…]")
             sys.exit(2)
@@ -1292,11 +1312,11 @@ if __name__ == "__main__":
         # 地址与密钥从 .env 按模型名解析（见 model_config.py）
         API_URL=None,
         # 改写要拆分支、统一参数、还要顾及跨步骤的命令复用。这个任务是"照着已有判据
-        # 重写"而不是"从散文里提炼判据"，未必吃推理，所以用调用量大、重跑便宜的
-        # qwen3.6-27b；跑过几轮后可用 compare_models.py 和 MiniMax-M2.7 对比复核。
-        # 注意换模型也换了输出预算：qwen 那档是 16384，MiniMax 是 32768，
-        # 场景步骤多时若撞上 finish_reason=length，用下面的 MAX_TOKENS 单独调大。
-        MODEL_NAME="qwen3.6-27b",
+        # 重写"而不是"从散文里提炼判据"，未必吃推理，所以用调用量大、重跑便宜的 qwen。
+        # 临时换模型不必改这里，命令行加 --model <模型名> 即可。
+        # 注意各档的输出预算不同（qwen 16384、MiniMax 32768），场景步骤多时若撞上
+        # finish_reason=length，用下面的 MAX_TOKENS 单独调大。
+        MODEL_NAME=MODEL_NAME,
         WORKERS=3,
         REPORT_PATH=f"reports/excel_skill_report_{datetime.now().strftime('%m-%d')}.md",
         # 留空表示遍历工作簿里的所有 sheet

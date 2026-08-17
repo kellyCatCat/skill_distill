@@ -40,6 +40,15 @@ MODEL_PROFILES = {
         "thinking": False,
         "max_tokens": 16384,
     },
+    # 和 qwen3.6 同一个部署，所以共用 QWEN 前缀。如果它在别的地址，把这里改成
+    # .env 里那组变量的前缀（例如 .env 写了 QWEN38_BASE_URL 就填 "QWEN38"）。
+    # thinking 按 `python3 model_config.py qwen3.8-27b --probe` 的实测结果填：
+    # 回复里出现 reasoning_content 就改成 True，并把 max_tokens 提到 32768。
+    "qwen3.8-27b": {
+        "env_prefix": "QWEN",
+        "thinking": False,
+        "max_tokens": 16384,
+    },
     # 实测（python3 model_config.py --probe）这个部署的非thinking变体同样返回
     # reasoning_content——关思考的 chat_template_kwargs 在它上面不起作用。既然
     # 发了也没用、而推理照样吃输出预算，就按"会思考"登记：不发那个无效字段，
