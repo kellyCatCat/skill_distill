@@ -135,4 +135,4 @@ description: SRv6 TE Policy 隧道 Down。出现 SRv6 TE Policy Down 告警、�
 | 故障感知检测 Down | `List State` 为 `Down (SID Stack Down)` 且 `Verification State` 为 `SID Unreachable` | 检查并修复 SID 可达性问题（链路故障或 IGP 路由缺失）：<br>`display srv6-te policy source-sid`<br>根据回显中的 Producer 与 Node 信息，检查对应 IGP 进程及链路状态 | `display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`（确认 `Verification State` 恢复正常） |
 | SRv6 TE Policy 超限 | `Policy State` 为 `Down (Overrun)`，Policy 数量超过 `SPEC_RES_SRV6POLICY_MAX_NUM` 规格 | 无直接 CLI 修复。删除不必要的 SRv6 TE Policy 配置以释放资源，或升级设备规格 | `display paf \| include SPEC_RES_SRV6POLICY_MAX_NUM` |
 | srlist 超限 | srlist 的 `List State` 为 `Down (Overrun)`，Segment List 数量超过 `SPEC_RES_SRV6POLICY_SEGLIST_GLOBAL_NUM` 规格 | 无直接 CLI 修复。删除不必要的 Segment List 配置以释放资源，或升级设备规格 | `display paf \| include SPEC_RES_SRV6POLICY_SEGLIST_GLOBAL_NUM` |
-| 未找到根因 | 全部检查步骤执行完毕，各字段均未命中已知故障特征 | 不做根因判定。输出已执行的全部检查步骤及结论摘要，并附 `Policy State`、`List State`、`BFD State`、`Verification State` 的实际取值与原始回显片段，交用户判断 | — |
+| 未找到根因 | 全部检查步骤执行完毕，各字段均未命中已知故障特征 | 输出已执行的全部检查步骤及结果摘要 | — |
