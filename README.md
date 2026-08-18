@@ -456,6 +456,10 @@ rewrite 会丢掉原文里没被重新输出的内容，所以落盘前有几道
 2. 推理 token 也占输出预算 → thinking 档 `max_tokens` 给到 32768，可按流水线用 `MAX_TOKENS` 覆盖；撞上限的报错会点明"thinking开启，推理token也占预算"
 3. 内联 `<think>` 块里若出现 ```json 围栏，会被提取器当成正式输出 → 提取前剥掉推理块
 
+### 重试时什么该回传给模型
+
+校验失败（extractor 判不合规）时，`retry_prompt` 会把原因写进下一次提问，模型才知道要改什么。但**不是每种失败都该这么办**：输出被截断（`finish_reason=length`）、响应体不是 JSON、只回了推理内容——这三类由 `ModelReplyError` 单独归类，重发原问题即可。模型改不了自己被截断这件事，那句"上一次的输出没有通过校验"只会把它带偏，还挤掉本就不够用的输出预算；正确的处置是调大 `MAX_TOKENS` 或拆小输入。
+
 ## 注意事项
 
 > **不带参数运行 `apply_change_report.py` 和 `skill_case_merge_pipeline.py` 时，默认的 skill 目录是 `skills_distilled/07-16`**，`apply_change_report.py` 的默认报告是案例合并那份。跑任何流程都建议**显式传路径**，别依赖默认值。

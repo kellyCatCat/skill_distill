@@ -71,6 +71,16 @@ def strip_reasoning(content: str) -> str:
     return content.strip()
 
 
+class ModelReplyError(Exception):
+    """回复还没走到内容校验就废了：被截断、响应体不是JSON、只回了推理内容。
+
+    这类失败**不是"内容不合规"**，重试时把原因塞进prompt没有意义——模型改不了
+    自己被截断这件事，那句"上一次的输出没有通过校验"只会把它带偏，还挤掉本就
+    不够用的输出预算。所以单独归一类，重发原问题即可（正确的处置是调大
+    max_tokens 或拆小输入，而不是让模型改写）。
+    """
+
+
 PROMPT_TEMPLATE = """你是一个ipran网络运维专家，需要在网管侧完成一份排障手册，将同一分类目录下的多篇输入文档合并转为一个完整的skill。
 
 # 任务要求
@@ -172,7 +182,9 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
     retry_prompt(原问题, 上次的错误说明) -> 新问题：内容校验失败时用它重写提问，
     把"哪儿不合规"告诉模型再让它改。不传就是原来的行为——把同一份prompt再发一遍，
     模型不知道自己错在哪，只能靠随机性碰运气。只在**内容**不合规时生效；超时、
-    连接失败这类传输问题重发原问题即可，把网络错误塞进prompt没有意义。"""
+    连接失败这类传输问题，以及输出被截断、响应体不是JSON、只回了推理内容
+    （见 ModelReplyError）都重发原问题即可——模型改不了这些，把原因塞进prompt
+    没有意义。"""
     cfg = resolve_model(model_name, api_url)
     payload = {
         "model": model_name,
@@ -220,7 +232,7 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                     if not body:
                         hint = ("；响应体为空，通常是网关/代理在模型生成完之前就断开了"
                                 "连接（可先用 python3 model_config.py --probe 确认链路）")
-                    raise Exception(
+                    raise ModelReplyError(
                         f"响应体不是JSON（HTTP {response.status_code}，"
                         f"Content-Type={response.headers.get('Content-Type', '?')}，"
                         f"{len(body)}字符，开头: {body[:200]!r}）{hint}")
@@ -232,7 +244,7 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
 
             content = strip_reasoning(raw_content)
             if finish_reason == 'length':
-                raise Exception(
+                raise ModelReplyError(
                     f"输出被截断(finish_reason=length)，正文{len(content)}字符"
                     f"（max_tokens={payload['max_tokens']}"
                     f"{'，thinking开启，推理token也占预算' if cfg['thinking'] else ''}），"
@@ -250,7 +262,7 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
                               "或改用推理没这么重的模型")
                 else:
                     advice = "按 finish_reason 判断原因"
-                raise Exception(
+                raise ModelReplyError(
                     f"只返回了推理内容、正文为空（reasoning_content {len(reasoning)}字符，"
                     f"finish_reason={finish_reason!r}，"
                     f"max_tokens={payload['max_tokens']}）：{advice}")
@@ -268,6 +280,11 @@ def call_model_with_retry(api_url: str, model_name: str, question: str, max_retr
             content_invalid = False
         except requests.exceptions.HTTPError as e:
             last_error = f"HTTP错误: {e.response.status_code} (尝试 {attempt + 1}/{max_retries})"
+            content_invalid = False
+        except ModelReplyError as e:
+            # 截断/响应体不是JSON/只回推理：模型改不了这些，重发原问题，
+            # 不要把这条原因当成格式校验意见发回去
+            last_error = f"{e} (尝试 {attempt + 1}/{max_retries})"
             content_invalid = False
         except Exception as e:
             last_error = f"未知错误: {str(e)} (尝试 {attempt + 1}/{max_retries})"
