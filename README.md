@@ -4,13 +4,15 @@
 
 生成的 skill 面向**执行排障的 agent**，不是给人看的手册：凡是"收集信息联系技术支持""提交给工程师""抓包分析"这类 agent 做不到的动作，一律不写进正文。
 
-## 三条主线
+## 四条主线
 
 ```mermaid
 flowchart LR
     A["源文档树<br/>result/v01/tree"] -- skill_self_distill_pipeline.py --> B[("skill 库<br/>skills_distilled/mm-dd")]
+    X["排障步骤表<br/>excel_cases/*.xlsx"] -- excel_skill_distill_pipeline.py --> R3["改写说明<br/>reports/excel_skill_report_*.md"]
     C["新故障案例<br/>cases/*.json"] -- skill_case_merge_pipeline.py --> R1["变更说明<br/>reports/skill_change_report_*.md"]
     D["排障评测结果<br/>evals/*.md"] -- skill_eval_optimize_pipeline.py --> R2["优化说明<br/>reports/skill_optimize_report_*.md"]
+    R3 -- "人工审 → apply_change_report.py --apply" --> G[("skill 库<br/>skills_from_excel/mm-dd")]
     R1 -- "人工审 → apply_change_report.py --apply" --> B
     R2 -- "人工审 → apply_change_report.py --apply" --> B
     B -- extract_display_commands.py --> E["查询命令<br/>cmd_distilled/mm-dd"]
@@ -20,12 +22,17 @@ flowchart LR
 | 主线 | 输入 | 做什么 | 落盘方式 |
 | --- | --- | --- | --- |
 | 批量蒸馏 | 源文档树 | 按目录分组，每组多篇文档合并成一个 skill | 直接写 |
+| 步骤表改写 | 排障步骤表 xlsx | 一个场景一篇 skill：拆分支、换掉表内编号、统一参数 | 出报告 → 人工审 → 落盘 |
 | 增量并入 | 新故障案例 JSON | 判断已覆盖 / 追加小节 / 新建 skill | 出报告 → 人工审 → 落盘 |
 | 评测优化 | 排障评测结果 | 定位是哪一步判据误导了 agent，整篇重写 | 出报告 → 人工审 → 落盘 |
 
-后两条都是"先出报告、审过再落盘"，原因见[为什么落盘要单独一个脚本](#为什么落盘要单独一个脚本)。
+除批量蒸馏外都是"先出报告、审过再落盘"，原因见[为什么落盘要单独一个脚本](#为什么落盘要单独一个脚本)。
+
+**输入形态决定了模型要干什么**：源文档树和案例 JSON 是散文，模型要**提炼**判据；排障步骤表已经是判据化的，模型只做**改写**（判据本身必须忠实于表格）。两者的写作约束因此是分开的两份，见[脚本一览](#脚本一览)。
 
 ## 快速开始
+
+依赖：`requests`；读排障步骤表那条线还要 `openpyxl`（`pip install requests openpyxl`）。
 
 ### 1. 配置模型接入
 
@@ -111,7 +118,61 @@ GROUPS=["故障处理：IP组播/IP组播故障案例", "故障处理：IP路由
 
 ---
 
-## 场景 2：增量并入新故障案例
+## 场景 2：把排障步骤表（xlsx）改写为 skill
+
+输入是已经判据化的表格（每一步都写明了查什么、看哪个字段、什么取值走哪个分支），所以模型做的**不是提炼判据而是改写**：判据本身必须忠实于表格。
+
+```bash
+# 1. 步骤表放进 excel_cases/，先解析和体检，不调模型
+python3 excel_skill_distill_pipeline.py --check
+
+# 2. 改写，出报告（默认 DRY-RUN，不写 skill 文件）
+python3 excel_skill_distill_pipeline.py
+python3 excel_skill_distill_pipeline.py --model MiniMax-M2.7   # 临时换模型
+
+# 3. 人工审 reports/excel_skill_report_<mm-dd>.md，确认无误后落盘
+python3 apply_change_report.py reports/excel_skill_report_08-18.md skills_from_excel/08-18 --diff
+python3 apply_change_report.py reports/excel_skill_report_08-18.md skills_from_excel/08-18 --apply
+```
+
+**改写要解决的是什么**：表里的"步骤详细描述"习惯把多个分支塞进一长句——
+
+> ……如果不存在则返回"X不存在"并结束执行；如果存在，则判断 Policy State 是否为 Up，如果不是 Up，则继续向下执行；如果……则返回"状态正常"并结束执行。
+
+一句话里 4 个分支、2 个终止点，agent 读这种句子容易漏分支。改写后每个分支单独一行，写清判据字段、取值、去向（跳转步骤 N / 结束排查）；表内的"3号命令行"换成真正的命令（agent 看不到那张表）；`<endpointipv6>`、`<colorid>` 这类混用的参数写法统一成 `<小写-连字符>`。
+
+**怎么读表**：`XLSX_PATH` 指向目录时处理其下**全部**工作簿，每个工作簿遍历**所有 sheet**（一个工作簿按协议分几个 sheet 是常态，只读第一个会静默漏掉）。一个 sheet 里的多个场景靠**首列的合并单元格**分块：一个合并区间 = 一个场景，区间覆盖的行是它的排障步骤。
+
+**输出路径由脚本定，不交给模型**：按告警名确定性推出 `<CATEGORY>/<告警名>.md`——让模型编路径会导致同一张表重跑生成不同文件名（案例合并那条线上已经吃过这个亏）。两个场景推出同一路径时会报出来，用 `SCENARIO_PATH_OVERRIDES` 钉死，或把 `CATEGORY` 设为 `None` 按工作簿文件名分目录。
+
+**先 `--check` 再花模型调用**：体检报 ragIndex 重号（一个编号指向两条不同命令，会让改写出的 skill 指向错的那条）、步骤编号不连续、多个场景撞同一输出路径。
+
+**输出格式定义在 `skill_template.md`**，四个章节顺序固定：`# 入参列表` → `# 前置检查` → `# 排查步骤` → `# 根因对照表`。它是 prompt 的一部分，改格式只改那个 markdown，不用动代码。
+
+**这条线的写作约束是单独一份**（`excel_skill_distill_pipeline.WRITING_RULES`），不复用另外三条共用的那份，因为本表有两处与它直接冲突：
+
+| 共用约束 | 这条线改成 | 为什么 |
+| --- | --- | --- |
+| 不要把仿真验证写成步骤 | 写进该修复方案的「影响性」说明 | 表里"修复建议影响性"列明写了影响大时要靠仿真保障——那是交给人的风险提示，不是 agent 的步骤 |
+| 回显不要照搬 | 判据依赖的字段名与取值原样保留并用反引号标出 | 判据直接依赖 `Policy State`、`List State`、`Down (Overrun)` 这些确切字段，改了 agent 就在回显里定位不到 |
+
+最要紧的一条是**只能用步骤表里出现过的 CLI，一条都不许自己生成**。命令来源只认「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列，**「回显」列不算**——回显是某台设备当时的输出（里面有 `bgp 100`、`segment-list 1`），把它当命令来源等于给"照着回显编一段配置"开后门，而那正是要拦的东西。表里只给了"减少 policy 数量"这种修复方向时，就照实写这句方向，不要补全成可执行的配置序列。
+
+**校验器会拦下的东西**（不合规的不落盘，只记进报告，并把原因回传给模型让它改）：命令没用反引号、参数不是 `<>` 形式、同一参数多种写法、残留表内编号、编造表里没有的命令、修复 CLI 里抄了回显的具体值、正文用了没申报的参数、前置检查里有跳转、根因对照表漏了步骤表写明的根因、跳转指向不存在的步骤。
+
+**改这条线之前先跑这两个**（都不需要内网）：
+
+```bash
+python3 test_excel_skill_format.py     # 逐条验校验器：合规的放过，每类违规各自被拦下
+python3 mock_run_excel_pipeline.py     # 用假的HTTP响应跑通整条流水线
+python3 excel_skill_distill_pipeline.py --validate excel_cases/sample_skill.md   # 单独校验已有文件
+```
+
+`mock_run_excel_pipeline.py` 只替换 `requests.post` 一层，retry、SSE 解析、extractor 校验、多进程、报告全是真的在走，覆盖四种情形：合规回复 + 普通 JSON、合规回复 + SSE 流（要与 JSON 路径逐字一致、中文不乱码）、违规回复（必须被拦下且一个文件都不许写出去）、先违规后合规（校验失败要把原因回传给模型，第二次通过）。
+
+---
+
+## 场景 3：增量并入新故障案例
 
 有新的故障案例（PPT/表格提取成 JSON）要并进既有 skill 库。
 
@@ -137,7 +198,7 @@ python3 validate_skills.py skills_distilled/07-27
 
 **流程内部**：载入案例（跳过只有标题的补充页、标注"已废弃/已从场景基线中去除"的条目）→ 按`故障类型`归组 → **定位**每组该并入哪个既有 skill 或新建 → **合并**判定 `covered` / `append` / `create` → 出报告。
 
-**每篇 skill 必须有的两节输出要求**（写在 `WRITING_RULES` 里，三条流水线共用）：
+**每篇 skill 必须有的两节输出要求**（写在 `WRITING_RULES` 里，散文输入的三条流水线共用；步骤表那条线用它自己的那份）：
 
 - **诊断结论输出要求**：定位到根因时输出「故障对象」（具体到网元名、端口/接口/会话名）、「根因类型」、「原因」（一句自然语言且必须含故障对象）、「修复建议」；未定位到根因时必须明确输出"未找到根因"并列出已执行的检查项，不许用推测代替根因。
 - **修复方案输出要求**：按方案逐条输出「方案序号」「方案说明」「修复对象名」「CLI序列」；走管控接口的给出路径与入参并注明不下发 CLI。参数取值来自数据查询、资源分配、配置下发三类接口。多个可选方案全部列出交人选择。
@@ -154,7 +215,7 @@ TARGET_OVERRIDES = {
 
 ---
 
-## 场景 3：按评测结果优化 skill
+## 场景 4：按评测结果优化 skill
 
 排障评测判了"诊断失败"，需要找出 skill 里是哪一步判据误导了 agent 并改掉。
 
@@ -231,7 +292,7 @@ python3 validate_skills.py skills_distilled/07-27
 故障处理：IP路由/BGP故障案例.md（确认后写进评测的"对应SKILL："行，或加进 EVAL_TARGET_OVERRIDES）
 ```
 
-### 模型会去找的 5 类缺陷
+### 模型会去找的 6 类缺陷
 
 prompt 里内置了定位方法，这是这条流水线的核心：
 
@@ -248,7 +309,7 @@ prompt 里内置了定位方法，这是这条流水线的核心：
 
 ---
 
-## 场景 4：决定某条流水线该用哪个模型
+## 场景 5：决定某条流水线该用哪个模型
 
 同一批评测跑多个模型并排比较，全程 DRY-RUN。
 
@@ -274,7 +335,7 @@ MiniMax-M2.7-thinking   ...BGP故障案例.md   optimized   9609→9883     103%
 
 ---
 
-## 场景 5：抽取 skill 里的 display 查询命令
+## 场景 6：抽取 skill 里的 display 查询命令
 
 按源文件一一对照输出成 JSON，便于单独核对命令是否有效。
 
@@ -287,7 +348,7 @@ python3 extract_display_commands.py skills_distilled/07-27
 
 ---
 
-## 场景 6：刷新 skill 树结构
+## 场景 7：刷新 skill 树结构
 
 ```bash
 python3 build_skill_tree.py skills_distilled/07-27              # 写入
@@ -308,7 +369,7 @@ conversion_report.json 里有记录但目录下找不到的 1 篇（转换失败
 
 ---
 
-## 场景 7：校验 skill 库
+## 场景 8：校验 skill 库
 
 ```bash
 python3 validate_skills.py skills_distilled/07-27
@@ -328,6 +389,8 @@ python3 validate_skills.py skills_distilled/07-27
 | 脚本 | 用途 |
 | --- | --- |
 | `skill_self_distill_pipeline.py` | 主蒸馏：源文档树 → skill 库 |
+| `excel_skill_distill_pipeline.py` | 排障步骤表 xlsx → skill（`--check` 只体检、`--model` 换模型、`--validate` 单独校验） |
+| `skill_template.md` | excel 那条线的输出格式定义，**是 prompt 的一部分**，改格式改这里 |
 | `skill_case_merge_pipeline.py` | 增量并入新故障案例 |
 | `skill_eval_optimize_pipeline.py` | 按评测结果优化 skill（加 `--check` 只验匹配） |
 | `apply_change_report.py` | 把审过的报告落盘（加 `--apply` 才写） |
@@ -336,16 +399,20 @@ python3 validate_skills.py skills_distilled/07-27
 | `build_skill_tree.py` | 按实际目录重建树结构 |
 | `extract_display_commands.py` | 抽取 display 查询命令 |
 | `validate_skills.py` | 校验 skill 合规性 |
+| `test_excel_skill_format.py` | 逐条验 excel 那条线的校验器（不需要内网） |
+| `mock_run_excel_pipeline.py` | 用假的 HTTP 响应跑通 excel 那条流水线（不需要内网） |
 
 ## 目录约定
 
 | 路径 | 内容 | 入库 |
 | --- | --- | --- |
 | `cases/` | 新增故障案例的原始数据 | ✅ |
+| `excel_cases/` | 排障步骤表 xlsx，以及格式基准 `sample_skill.md`（测试要读） | ✅ |
 | `evals/` | 排障评测结果 | ❌ |
-| `reports/` | 变更说明；运行时生成的 `skill_change_report_*.md`、`skill_optimize_report_*.md` | 仅固定命名的入库 |
+| `reports/` | 变更说明；运行时生成的 `skill_change_report_*.md`、`skill_optimize_report_*.md`、`excel_skill_report_*.md` | 仅固定命名的入库 |
 | `result/` | 源文档树 | ❌ |
 | `skills_distilled/` | 生成的 skill 库 | ❌ |
+| `skills_from_excel/` | 步骤表改写出的 skill 库 | ❌ |
 | `cmd_distilled/` | 抽取出的查询命令 | ❌ |
 | `.env` | 模型地址与密钥 | ❌ |
 
@@ -353,7 +420,7 @@ python3 validate_skills.py skills_distilled/07-27
 
 ### 为什么落盘要单独一个脚本
 
-两条增量流水线默认 `DRY_RUN=True`，只出报告不写文件。如果改成 `DRY_RUN=False` 重跑，模型会**重新生成一遍**——落盘的就不是你审过的那份内容了。所以审完必须用 `apply_change_report.py` 把报告里的内容原样落盘。
+除批量蒸馏外的三条流水线默认 `DRY_RUN=True`，只出报告不写文件。如果改成 `DRY_RUN=False` 重跑，模型会**重新生成一遍**——落盘的就不是你审过的那份内容了。所以审完必须用 `apply_change_report.py` 把报告里的内容原样落盘。
 
 ### 三种落盘动作
 
@@ -366,6 +433,8 @@ python3 validate_skills.py skills_distilled/07-27
 | `## 优化skill：\`路径\`` | rewrite | 整篇覆盖原文件 |
 
 **落盘是幂等的**：append 先比对小节标题、create 遇到文件已存在就跳过、rewrite 内容一致就跳过。同一份报告重复执行不会写两遍。
+
+**动作要和磁盘上的实际情况对得上**：模型偶尔会给出与实际不符的 `action`，两种都不能照做——`create` 到已存在的文件会把既有 skill 整篇覆盖掉（而且悄无声息），`append` 到不存在的文件直接报错。两处都会被挡下、记进报告的"处理失败"，交人工确认是改判动作还是路径写错了。`skill_case_merge_pipeline.py` 自己落盘时（`DRY_RUN=False`）做同样的核对，两条落盘路径的防护是一致的。
 
 **审改动用 `--diff`**：整篇覆盖只报"9609→9956字符"看不出改了什么，而判据有没有真被改掉、原有场景有没有被顺手删掉，都得逐行看。`--diff` 一定不写文件（同时给了 `--apply` 也不写）。
 
@@ -391,6 +460,7 @@ rewrite 会丢掉原文里没被重新输出的内容，所以落盘前有几道
 
 > **不带参数运行 `apply_change_report.py` 和 `skill_case_merge_pipeline.py` 时，默认的 skill 目录是 `skills_distilled/07-16`**，`apply_change_report.py` 的默认报告是案例合并那份。跑任何流程都建议**显式传路径**，别依赖默认值。
 
+- `excel_skill_distill_pipeline.py` 默认处理 `excel_cases/` 下的**每一个** xlsx，其中包括仓库自带的样例表 `排障步骤表.xlsx`（它同时是测试的输入，别删）。只想跑自己那张表时，把 `XLSX_DIR` 指到具体文件。
 - 整篇覆盖前先提交或备份 skill 目录，出错了好回滚。
 - `git pull` 会删掉本地 `evals/` 下的文件——`evals/` 从被跟踪改成忽略时，拉到那个提交会让 git 把它当作被删除的跟踪文件一起删掉。pull 前先备份。
 - 源文档树、skill 库、评测结果都不在仓库里，蒸馏用的模型接口也只在内网可达，所以这套流水线要在能访问模型的机器上跑。

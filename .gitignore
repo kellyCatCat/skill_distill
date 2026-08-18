@@ -2,8 +2,10 @@ __pycache__/
 *.pyc
 result/
 skills_distilled/
+skills_from_excel/
 cmd_distilled/
 reports/skill_change_report_*.md
 reports/skill_optimize_report_*.md
+reports/excel_skill_report_*.md
 evals/
 .env
