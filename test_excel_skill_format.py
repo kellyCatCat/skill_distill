@@ -13,6 +13,7 @@
 用法：
   python3 test_excel_skill_format.py
 """
+import copy
 import re
 import sys
 
@@ -122,9 +123,29 @@ CASES = [
 ]
 
 
+# 步骤表里的命令什么关键字开头都有（ospf / isis / mpls / vlan…），而这张基准表
+# 恰好只有 display 这一类。曾经"像不像命令"是靠一张关键字白名单判的，白名单外的
+# 命令即使按要求写成了行内代码也永远匹配不上，模型三次重试全废且无从改起。
+# 这两例专门守住这条：换个关键字，写对了要放过、没用反引号仍要拦。
+OTHER_KEYWORD_SCENARIO = copy.deepcopy(scenario)
+OTHER_KEYWORD_SCENARIO["steps"][0]["command"] += "\nospf <process-id>"
+
+
+def with_ospf(command_text: str) -> str:
+    """把一条 ospf 命令写进正文，并把它的参数补进入参列表。"""
+    content = GOOD.replace(
+        "# 根因对照表", f"补充：执行 {command_text} 进入视图。\n\n# 根因对照表", 1)
+    return content.replace(
+        "| policy 名称 |", "| process ID | 是 | OSPF 进程号 |\n| policy 名称 |", 1)
+
+
 # 单独直查的用例：这些分支在 check_skill_format 里会被更早的检查抢先命中，
 # 但分支本身的行为仍要验（否则改动它时没人发现）。
 DIRECT_CASES = [
+    ("非display开头的命令写对了要放过", check_skill_format,
+     (with_ospf("`ospf <process-id>`"), OTHER_KEYWORD_SCENARIO), ""),
+    ("非display开头的命令没用反引号仍要拦", check_skill_format,
+     (with_ospf("ospf <process-id>"), OTHER_KEYWORD_SCENARIO), "没有以行内代码"),
     # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
     ("子关键字不当成写死的值", check_hardcoded_operands,
      ("```\nbgp route-learning acceleration enable\n```",), ""),

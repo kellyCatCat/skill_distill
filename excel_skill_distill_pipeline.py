@@ -764,11 +764,26 @@ POLICY_OPERAND = re.compile(r"^(?:undo\s+)?(srv6-te\s+policy|sr-te\s+policy)\s+(
 LOOKS_LIKE_INSTANCE = re.compile(r"^[\w./:-]*\d[\w./:-]*$")
 
 
+# 像命令的行内代码：首个词全小写、且整段带空格。
+# 判据字段与取值也用反引号标（`Policy State`、`Up`、`Down (Shutdown)`、
+# `SID Unreachable`），它们首字母大写，靠这一点区分开。
+COMMAND_LIKE = re.compile(r"^[a-z][a-z0-9._-]*\s")
+
+# 不带参数、整条就一个词的命令。它们没有空格，COMMAND_LIKE 认不出来。
+SINGLE_WORD_COMMANDS = ("commit", "quit", "return", "save", "system-view")
+
+
 def inline_commands(markdown: str) -> list:
-    """正文里被反引号包起来、看着像设备命令的片段。"""
+    """正文里被反引号包起来、看着像设备命令的片段。
+
+    判断标准是"首个词全小写"这一条通用规则，不是一张关键字白名单：步骤表里的
+    命令什么关键字开头都有（ospf / isis / mpls / ip route-static / vlan…），
+    白名单漏掉哪个，哪个就永远匹配不上——`ospf <process-id>` 明明按要求写成了
+    行内代码，却仍被判成"没有以行内代码出现"，模型三次重试全废且无从改起。
+    """
     return [span for span in INLINE_CODE.findall(markdown)
-            if re.match(r"^(display|ping|tracert|undo|system-view|commit|"
-                        r"segment-routing|bgp|interface)\b", span.strip())]
+            if COMMAND_LIKE.match(span.strip())
+            or span.strip() in SINGLE_WORD_COMMANDS]
 
 
 def cli_lines(markdown: str) -> list:
@@ -818,12 +833,6 @@ def known_commands(scenario: dict) -> set:
 # `bgp 100`、`peer 1::2 enable`、`segment-list 1`——把它当命令来源，等于给
 # "照着回显编一段配置"开了后门，而那正是要拦的东西。
 COMMAND_SOURCE_FIELDS = ("command", "fix", "verify", "detail")
-
-# 像命令的行内代码：首个词全小写、且整段带空格。
-# 判据字段与取值也用反引号标（`Policy State`、`Up`、`Down (Shutdown)`、
-# `SID Unreachable`），它们首字母大写，靠这一点区分开。
-COMMAND_LIKE = re.compile(r"^[a-z][a-z0-9._-]*\s")
-
 
 def source_command_text(scenario: dict) -> str:
     """步骤表里所有可以当作命令来源的文字，归一化后拼成一大串。"""
@@ -916,12 +925,15 @@ def check_skill_format(content: str, scenario: dict) -> str:
     # ...configuration bgp 前两个词相同，display paf | include SPEC_RES_A 与
     # SPEC_RES_B 也是，只比前两个词的话模型漏写一条照样能通过。参数名会被改写，
     # 所以只比参数之前的部分。
+    # 比的是步骤表里的命令，它本来就是命令，所以这里对行内代码不做任何"像不像
+    # 命令"的过滤——过滤只会让某些关键字开头的命令怎么写都通不过。
+    spans = INLINE_CODE.findall(content)
     for step in scenario["steps"]:
         for command in step_commands(step):
             literal = command.split("<")[0].strip()
             if not literal:
                 continue
-            if not any(literal in span for span in inline_commands(content)):
+            if not any(literal in span for span in spans):
                 return (f"命令 {command!r} 没有以行内代码（反引号包裹）的形式"
                         f"出现在正文里")
 
