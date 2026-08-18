@@ -11,12 +11,13 @@ from datetime import datetime
 from multiprocessing import Pool
 
 from build_skill_tree import render_tree, write_tree_file
-from model_config import resolve_model
+from model_config import _allow_direct_connection, resolve_model
 
 # 模型主机不走代理。各模型的主机由 model_config.resolve_model 按 .env 里的地址
 # 追加进 NO_PROXY，这里只保留最早那台内网机器，避免旧的调用方式失效。
-os.environ['NO_PROXY'] = '76.64.185.52'
-os.environ['no_proxy'] = '76.64.185.52'
+# 用追加而不是赋值：直接写 NO_PROXY 会把调用方环境里已有的免代理主机全部清掉。
+# 这台机器多半已经由 resolve_model 加过一遍了，重复添加会被去重，不会写两次。
+_allow_direct_connection('76.64.185.52')
 
 # thinking模型有两种放推理过程的方式：独立的 reasoning_content 字段（content干净，
 # 无需处理），或内联在content里的 <think>…</think>。后者必须剥掉——提取器抓的是
@@ -62,7 +63,7 @@ def parse_sse_stream(text: str) -> tuple:
 
 
 def strip_reasoning(content: str) -> str:
-    """剥掉内联的推理块；只有开标签没有闭标签时（被截断）丢弃该标签之前的内容。"""
+    """剥掉内联的推理块；只有开标签没有闭标签时（被截断）丢弃该标签及其之后的内容。"""
     content = REASONING_BLOCK_PATTERN.sub("", content or "")
     unclosed = re.search(r"<(?:think|thinking|reasoning)>", content, re.IGNORECASE)
     if unclosed:

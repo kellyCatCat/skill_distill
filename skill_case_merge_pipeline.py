@@ -22,7 +22,9 @@ from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
 
-from skill_self_distill_pipeline import call_model_with_retry, extract_markdown_content
+from skill_self_distill_pipeline import (_longest_common_substring_len,
+                                         call_model_with_retry,
+                                         extract_markdown_content)
 
 # 案例条目标注了这些字样时不再并入skill（场景已下线/已确认不成立）
 RETIRED_MARKERS = ("已废弃", "已从场景基线中去除")
@@ -335,19 +337,6 @@ def _root_cause_matches(row_cause: str, case_cause: str) -> bool:
     if a in b or b in a:
         return True
     return _longest_common_substring_len(a, b) / min(len(a), len(b)) >= 0.6
-
-
-def _longest_common_substring_len(a: str, b: str) -> int:
-    prev = [0] * (len(b) + 1)
-    best = 0
-    for ch_a in a:
-        cur = [0] * (len(b) + 1)
-        for j, ch_b in enumerate(b, 1):
-            if ch_a == ch_b:
-                cur[j] = prev[j - 1] + 1
-                best = max(best, cur[j])
-        prev = cur
-    return best
 
 
 def audit_overview_coverage(cases: list, skipped: list, overview_table: list) -> tuple:
