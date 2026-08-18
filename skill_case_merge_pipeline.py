@@ -525,12 +525,29 @@ def validate_change(result: dict) -> str:
     return check_generated_content(result.get("action"), result.get("content"))
 
 
-def apply_change(result: dict, skill_dir: str, dry_run: bool) -> None:
+def apply_change(result: dict, skill_dir: str, dry_run: bool) -> str:
+    """应用一处改动，返回错误说明（空串表示已处理）。
+
+    动作要和磁盘上的实际情况对得上，对不上必须挡住而不是照做——模型偶尔会给出
+    与实际不符的action，两种都会造成实打实的损失：
+      - create 到已存在的文件：把既有skill整篇覆盖掉，而且悄无声息；
+      - append 到不存在的文件：open(..., 'r') 抛 FileNotFoundError。
+
+    `apply_change_report.py` 落盘时也做同样的核对，两条落盘路径的防护要一致。
+    """
     action = result["action"]
     path = os.path.join(skill_dir, *result["target"].split("/"))
+    exists = os.path.isfile(path)
+    if action == "create" and exists:
+        return (f"判定为新建，但 {result['target']} 已存在——照做会把既有skill整篇"
+                f"覆盖掉。请人工确认是该改判append，还是本就该写到别的路径"
+                f"（用 TARGET_OVERRIDES 指定）")
+    if action == "append" and not exists:
+        return (f"判定为追加，但 {result['target']} 不存在——请人工确认是该改判"
+                f"create，还是路径写错了（用 TARGET_OVERRIDES 指定）")
     if dry_run:
         print(f"[DRY-RUN] {action} → {path}")
-        return
+        return ""
     if action == "append":
         with open(path, 'r', encoding='utf-8') as f:
             existing = f.read().rstrip()
@@ -542,6 +559,7 @@ def apply_change(result: dict, skill_dir: str, dry_run: bool) -> None:
         with open(path, 'w', encoding='utf-8') as f:
             f.write(result["content"].strip() + "\n")
         print(f"已新建: {path}")
+    return ""
 
 
 def build_report(results: list, skipped: list, locate_errors: list,
@@ -702,7 +720,15 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
         if result["action"] == "covered":
             print(f"[SKIP] {result['target']}: 已被既有skill覆盖")
             continue
-        apply_change(result, SKILL_DIR, DRY_RUN)
+        # 落盘失败只该让这一处改动失败：异常漏出去会中断整个循环，而报告是在
+        # 循环之后才写的——前面已经写进磁盘的改动就没有任何记录了。
+        try:
+            invalid = apply_change(result, SKILL_DIR, DRY_RUN)
+        except OSError as e:
+            invalid = f"写入失败: {type(e).__name__}: {e}"
+        if invalid:
+            result["invalid"] = invalid
+            print(f"[FAIL] {result['target']}: {invalid}")
 
     report = build_report(results, skipped, locate_errors, CASES_PATH, SKILL_DIR, DRY_RUN)
     os.makedirs(os.path.dirname(os.path.abspath(REPORT_PATH)), exist_ok=True)
