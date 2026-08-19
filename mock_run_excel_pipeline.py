@@ -38,7 +38,7 @@ from test_excel_skill_format import GOOD
 # 模型来覆盖它，否则这条分支会跟着模型一起没人测，将来接入会思考的模型时才发现坏了。
 THINKING_MODEL = "mock-thinking-model"
 model_config.MODEL_PROFILES[THINKING_MODEL] = {
-    "env_prefix": "QWEN", "thinking": True, "max_tokens": 32768}
+    "env_prefix": "QWEN38", "thinking": True, "max_tokens": 32768}
 
 # 不会真的被访问到：requests.post 已被替换，这里只是让 resolve_model 不去读 .env
 MOCK_URL = "http://mock.invalid/v1/chat/completions"

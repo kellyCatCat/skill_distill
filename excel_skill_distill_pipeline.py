@@ -1341,7 +1341,7 @@ if __name__ == "__main__":
         # 重写"而不是"从散文里提炼判据"，未必吃推理，所以用调用量大、重跑便宜的 qwen。
         # 临时换模型不必改这里，命令行加 --model <模型名> 即可。
         # 场景步骤多时若撞上 finish_reason=length，用下面的 MAX_TOKENS 单独调大
-        # （或改 .env 里的 QWEN_MAX_TOKENS）。
+        # （或改 .env 里的 QWEN38_MAX_TOKENS）。
         MODEL_NAME=MODEL_NAME,
         WORKERS=3,
         REPORT_PATH=f"reports/excel_skill_report_{datetime.now().strftime('%m-%d')}.md",

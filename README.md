@@ -45,14 +45,16 @@ cp .env.example .env
 ```
 
 ```ini
-QWEN_BASE_URL=http://<host>:<port>/v1
-QWEN_API_KEY=
+# qwen3.8-27b（全项目统一用这一档）
+QWEN38_BASE_URL=http://<host>:<port>/v1
+QWEN38_API_KEY=
 
-MINIMAX_BASE_URL=http://<host>:<port>/v1
-MINIMAX_API_KEY=<your-api-key>
+# qwen3.6-27b（另一个部署）
+QWEN36_BASE_URL=http://<host>:<port>/v1
+QWEN36_API_KEY=
 ```
 
-环境变量优先于 `.env`，可临时覆盖：`QWEN_BASE_URL=... python3 xxx.py`。
+一个模型一组变量，前缀由 `model_config.MODEL_PROFILES` 里的 `env_prefix` 指定——换地址改 `.env`，换成另一组变量才改代码。环境变量优先于 `.env`，可临时覆盖：`QWEN38_BASE_URL=... python3 xxx.py`。
 
 ### 2. 自查配置是否解析正确
 
@@ -64,7 +66,7 @@ python3 model_config.py
 ● qwen3.8-27b
     地址      : http://127.0.0.1:2207/v1/chat/completions
     密钥      : sk-cac-…4pS7（54字符）
-    max_tokens: 16384
+    max_tokens: 32768
     思考      : 关
 ```
 

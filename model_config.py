@@ -18,7 +18,7 @@
 
 注意：下面的 MODEL_PROFILES 才是"有哪些模型"的来源，.env 只放地址和密钥。往 .env
 里加东西不会让新模型出现在列表里——要么登记进 MODEL_PROFILES，要么用第三种用法
-直接按名字探测（没登记的按兜底档处理：QWEN 前缀、不开思考、max_tokens 16384）。
+直接按名字探测（没登记的按兜底档处理：QWEN38 前缀、不开思考、max_tokens 32768）。
 """
 import json
 import os
@@ -36,19 +36,20 @@ ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 # thinking=False 时才发送关思考的 chat_template_kwargs；thinking=True 时
 # 整个字段都不发，让模型按自己的默认行为思考——不猜各家开思考的字段名。
 MODEL_PROFILES = {
+    # 两档在不同的部署上，各用各的一组 .env 变量（QWEN36_* / QWEN38_*）。
+    # 换地址就改 .env，换成另一组变量才改这里的 env_prefix。
     "qwen3.6-27b": {
-        "env_prefix": "QWEN",
+        "env_prefix": "QWEN36",
         "thinking": False,
-        "max_tokens": 16384,
+        "max_tokens": 32768,
     },
-    # 和 qwen3.6 同一个部署，所以共用 QWEN 前缀。如果它在别的地址，把这里改成
-    # .env 里那组变量的前缀（例如 .env 写了 QWEN38_BASE_URL 就填 "QWEN38"）。
-    # thinking 按 `python3 model_config.py qwen3.8-27b --probe` 的实测结果填：
-    # 回复里出现 reasoning_content 就改成 True，并把 max_tokens 提到 32768。
+    # 全项目现在统一用这一档。thinking 按
+    # `python3 model_config.py qwen3.8-27b --probe` 的实测结果填：回复里出现
+    # reasoning_content 就改成 True（那时关思考的字段发了也没用，还白占预算）。
     "qwen3.8-27b": {
-        "env_prefix": "QWEN",
+        "env_prefix": "QWEN38",
         "thinking": False,
-        "max_tokens": 16384,
+        "max_tokens": 32768,
     },
 }
 
@@ -58,8 +59,9 @@ MODEL_PROFILES = {
 # thinking=True 时整个关思考的字段都不发，让模型按自己的默认行为思考——不猜各家
 # 开思考的字段名；推理token也占输出预算，所以那档预算要留够。
 
-# 没登记的模型名按这个兜底，仍可用 api_url 参数直接指定地址
-DEFAULT_PROFILE = {"env_prefix": "QWEN", "thinking": False, "max_tokens": 16384}
+# 没登记的模型名按这个兜底，仍可用 api_url 参数直接指定地址。兜底跟着当前主力那
+# 一档走：新模型多半先挂在同一个部署上试，猜错地址总比猜一个谁都没有的前缀强。
+DEFAULT_PROFILE = {"env_prefix": "QWEN38", "thinking": False, "max_tokens": 32768}
 
 
 def load_env_file(path: str = ENV_PATH) -> dict:
@@ -74,7 +76,7 @@ def load_env_file(path: str = ENV_PATH) -> dict:
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip().strip("'\"")
-            # 真实环境变量优先，方便临时覆盖：QWEN_BASE_URL=... python3 xxx.py
+            # 真实环境变量优先，方便临时覆盖：QWEN38_BASE_URL=... python3 xxx.py
             values[key] = os.environ.get(key) or value
     return values
 
