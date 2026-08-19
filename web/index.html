@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>排障步骤表 → skill</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --line: #dfe3e8; --text: #1c2024;
+  --muted: #6b7280; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c;
+  --warn: #a16207; --warn-bg: #fef9e7; --code-bg: #f6f8fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d; --panel: #1e2127; --line: #333842; --text: #e6e8eb;
+    --muted: #9aa2ae; --accent: #6ea8fe; --ok: #4ade80; --bad: #f87171;
+    --warn: #fbbf24; --warn-bg: #2c2717; --code-bg: #15171c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text);
+  font: 15px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+.wrap { max-width: 1080px; margin: 0 auto; }
+h1 { font-size: 21px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 18px; margin-bottom: 18px;
+}
+.panel[hidden] { display: none; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1 1 220px; }
+label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+select, input[type=text], input[type=file] {
+  font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); color: var(--text); min-width: 180px;
+}
+button {
+  font: inherit; padding: 8px 16px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin: 10px 0 0;
+}
+.tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.tag.ok { color: var(--ok); border-color: currentColor; }
+.tag.failed { color: var(--bad); border-color: currentColor; }
+.tag.pending { color: var(--muted); }
+.audit { background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
+.audit h3 { margin: 0 0 6px; font-size: 14px; color: var(--warn); }
+.audit li { font-size: 13px; }
+.err { color: var(--bad); font-size: 13px; white-space: pre-wrap; }
+.note { color: var(--muted); font-size: 13px; }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 10px; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.mono-small { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>排障步骤表 → skill</h1>
+  <p class="sub">上传 xlsx → 先看解析和体检（不花模型调用）→ 生成 → 逐篇审阅 → 确认后落盘。生成的内容默认不写文件。</p>
+
+  <div class="panel">
+    <h2>1. 上传排障步骤表</h2>
+    <div class="row">
+      <input type="file" id="files" accept=".xlsx,.xlsm" multiple>
+      <label class="field">输出目录归类
+        <select id="category">
+          <option value="排障步骤">固定一级目录：排障步骤</option>
+          <option value="">按工作簿文件名分目录</option>
+        </select>
+      </label>
+      <button class="primary" id="upload">解析并体检</button>
+    </div>
+    <p class="note" id="upload-note">可一次选多个工作簿；每个工作簿的所有 sheet 都会遍历。</p>
+  </div>
+
+  <div class="panel" id="parsed" hidden>
+    <h2>2. 解析结果</h2>
+    <div id="audit"></div>
+    <table>
+      <thead><tr>
+        <th><input type="checkbox" id="check-all" checked></th>
+        <th>场景</th><th>来源</th><th class="num">步骤</th><th>输出路径</th><th>状态</th>
+      </tr></thead>
+      <tbody id="scenarios"></tbody>
+    </table>
+    <div class="row" style="margin-top:16px">
+      <label class="field">模型
+        <select id="model"></select>
+      </label>
+      <button class="primary" id="generate">生成选中场景的 skill</button>
+      <span class="note" id="progress"></span>
+    </div>
+    <div class="bar" id="bar" hidden><i></i></div>
+  </div>
+
+  <div class="panel" id="results" hidden>
+    <h2>3. 审阅生成结果</h2>
+    <div id="cards"></div>
+    <div class="row" style="margin-top:18px">
+      <label class="field grow">落盘目录
+        <input type="text" id="output">
+      </label>
+      <button class="primary" id="apply">落盘选中项</button>
+      <button id="zip">下载 zip</button>
+      <button id="report">下载改写说明</button>
+    </div>
+    <p class="note" id="apply-note">落盘只写校验通过的那几篇。改写说明与命令行流水线的格式一致，也可以交给 apply_change_report.py 落盘。</p>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let JOB = null, POLL = null;
+
+const state = (s) => ({ok: '已生成', failed: '失败', pending: '未生成'}[s] || s);
+
+// 所有插进 innerHTML 的文本都要过这里。体检提示、失败原因、参数统一里全是
+// `<endpoint-ipv6>` 这种尖括号，不转义会被浏览器当成未知标签直接吞掉——
+// 那一行就变成空白，而它恰恰是最该给人看的内容。
+const esc = (value) => String(value == null ? '' : value)
+  .replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({error: '响应不是JSON'}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+function selected() {
+  return [...document.querySelectorAll('#scenarios input.pick:checked')]
+    .map((box) => Number(box.value));
+}
+
+async function loadModels() {
+  const data = await api('/api/models');
+  $('model').innerHTML = data.models
+    .map((name) => `<option${name === data.default ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  $('output').value = data.default_output;
+}
+
+function renderAudit(audit) {
+  if (!audit.length) { $('audit').innerHTML = ''; return; }
+  const items = audit.flatMap((entry) =>
+    entry.issues.map((issue) => `<li><code>${esc(entry.name)}</code>：${esc(issue)}</li>`)).join('');
+  $('audit').innerHTML =
+    `<div class="audit"><h3>步骤表体检：${audit.reduce((n, e) => n + e.issues.length, 0)} 处问题（建议先改表）</h3><ul>${items}</ul></div>`;
+}
+
+function renderScenarios(job) {
+  $('scenarios').innerHTML = job.scenarios.map((s) => `
+    <tr>
+      <td><input type="checkbox" class="pick" value="${s.index}" checked></td>
+      <td>${esc(s.name)}<div class="mono-small">sheet ${esc(s.sheet)}｜第 ${s.rows[0]}-${s.rows[1]} 行</div></td>
+      <td class="mono-small">${esc(s.source)}</td>
+      <td class="num">${s.steps}</td>
+      <td><code>${esc(s.skill_path)}</code></td>
+      <td><span class="tag ${s.state}">${state(s.state)}</span></td>
+    </tr>`).join('');
+}
+
+function renderCards(job) {
+  const done = job.scenarios.filter((s) => s.state !== 'pending');
+  $('results').hidden = done.length === 0;
+  $('cards').innerHTML = done.map((s) => {
+    const bits = [];
+    if (s.state === 'failed') {
+      bits.push(`<p class="err">${esc(s.failure)}</p>`);
+      if (s.needs_manual_fix) bits.push(`<p class="note">下面是最后一次生成的内容，多半只差一两处，可下载后手工改。</p>`);
+    }
+    if (s.branches_expanded) bits.push(`<p class="note">分支拆解：${esc(s.branches_expanded)}</p>`);
+    if (s.repaired) bits.push(`<p class="note">自动修复：${esc(s.repaired)}</p>`);
+    if ((s.commands_normalized || []).length) {
+      bits.push(`<p class="note">参数统一：${s.commands_normalized
+        .map((c) => esc(`${c.from || ''} → ${c.to || ''}`)).join('；')}</p>`);
+    }
+    if (s.content) {
+      bits.push(`<details><summary>查看全文（${s.content.length} 字符）</summary><pre>${
+        esc(s.content)}</pre></details>`);
+      bits.push(`<p><a href="/api/skill?job=${job.job}&index=${s.index}">下载这一篇</a></p>`);
+    }
+    return `<div class="panel" style="margin:12px 0">
+      <div class="row"><strong>${esc(s.name)}</strong>
+        <span class="tag ${s.state}">${state(s.state)}</span>
+        <code>${esc(s.skill_path)}</code></div>${bits.join('')}
+    </div>`;
+  }).join('');
+}
+
+function render(job) {
+  JOB = job;
+  $('parsed').hidden = false;
+  renderAudit(job.audit);
+  renderScenarios(job);
+  renderCards(job);
+  const running = job.status === 'running';
+  $('generate').disabled = running;
+  $('apply').disabled = running;
+  $('bar').hidden = !running;
+  $('bar').firstElementChild.style.width =
+    job.progress.total ? `${100 * job.progress.done / job.progress.total}%` : '0';
+  $('progress').textContent = running
+    ? `生成中 ${job.progress.done}/${job.progress.total}…（一篇约几十秒）`
+    : (job.error ? `出错：${job.error}` : '');   // textContent 不解析HTML，无需转义
+}
+
+async function poll() {
+  const job = await api(`/api/job?job=${JOB.job}`);
+  render(job);
+  if (job.status !== 'running') { clearInterval(POLL); POLL = null; }
+}
+
+$('check-all').onchange = (e) => {
+  document.querySelectorAll('#scenarios input.pick').forEach((b) => { b.checked = e.target.checked; });
+};
+
+$('upload').onclick = async () => {
+  const files = $('files').files;
+  if (!files.length) { $('upload-note').textContent = '先选一个 .xlsx 文件'; return; }
+  const form = new FormData();
+  for (const file of files) form.append('file', file);
+  form.append('category', $('category').value);
+  $('upload').disabled = true;
+  $('upload-note').textContent = '解析中…';
+  try {
+    render(await api('/api/upload', {method: 'POST', body: form}));
+    $('upload-note').textContent = `解析出 ${JOB.scenarios.length} 个场景（未调用模型）`;
+    $('results').hidden = true;
+  } catch (e) {
+    $('upload-note').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  } finally {
+    $('upload').disabled = false;
+  }
+};
+
+$('generate').onclick = async () => {
+  const indexes = selected();
+  if (!indexes.length) { $('progress').textContent = '没有选中任何场景'; return; }
+  try {
+    render(await api('/api/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job: JOB.job, indexes, model: $('model').value}),
+    }));
+    if (!POLL) POLL = setInterval(poll, 1500);
+  } catch (e) {
+    $('progress').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+};
+
+$('apply').onclick = async () => {
+  try {
+    const data = await api('/api/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job: JOB.job, indexes: selected(), output_dir: $('output').value}),
+    });
+    render(data);
+    const lines = data.applied.map(
+      (a) => esc(`${a.path || '第' + a.index + '个场景'}：${a.note}`));
+    $('apply-note').innerHTML = `写入 <code>${esc(data.output_dir)}</code><br>` + lines.join('<br>');
+  } catch (e) {
+    $('apply-note').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+};
+
+$('zip').onclick = () => { location.href = `/api/zip?job=${JOB.job}&indexes=${selected().join(',')}`; };
+$('report').onclick = () => { location.href = `/api/report?job=${JOB.job}`; };
+
+loadModels();
+</script>
+</body>
+</html>

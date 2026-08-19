@@ -10,6 +10,7 @@
 flowchart LR
     A["源文档树<br/>result/v01/tree"] -- skill_self_distill_pipeline.py --> B[("skill 库<br/>skills_distilled/mm-dd")]
     X["排障步骤表<br/>excel_cases/*.xlsx"] -- excel_skill_distill_pipeline.py --> R3["改写说明<br/>reports/excel_skill_report_*.md"]
+    X -- "web_server.py（网页上传）" --> R3
     C["新故障案例<br/>cases/*.json"] -- skill_case_merge_pipeline.py --> R1["变更说明<br/>reports/skill_change_report_*.md"]
     D["排障评测结果<br/>evals/*.md"] -- skill_eval_optimize_pipeline.py --> R2["优化说明<br/>reports/skill_optimize_report_*.md"]
     R3 -- "人工审 → apply_change_report.py --apply" --> G[("skill 库<br/>skills_from_excel/mm-dd")]
@@ -169,6 +170,32 @@ python3 excel_skill_distill_pipeline.py --validate excel_cases/sample_skill.md  
 ```
 
 `mock_run_excel_pipeline.py` 只替换 `requests.post` 一层，retry、SSE 解析、extractor 校验、多进程、报告全是真的在走，覆盖四种情形：合规回复 + 普通 JSON、合规回复 + SSE 流（要与 JSON 路径逐字一致、中文不乱码）、违规回复（必须被拦下且一个文件都不许写出去）、先违规后合规（校验失败要把原因回传给模型，第二次通过）。
+
+### 网页前端：传表格 → 看解析 → 生成 → 审阅 → 落盘
+
+不想改脚本末尾的参数、也不想在终端里审报告时，用网页那层：
+
+```bash
+python3 web_server.py                       # http://127.0.0.1:8000
+python3 web_server.py --port 8080 --host 0.0.0.0 --workers 4
+python3 web_server.py --output skills_from_excel/08-19   # 落盘目录默认值，页面上还能改
+```
+
+只用标准库，内网机器上不必再装 web 框架；解析、体检、prompt、校验、报告全部复用 `excel_skill_distill_pipeline` 的函数，所以校验规则改了网页这边不用跟着改。
+
+页面上的三步和命令行的 `--check` + DRY-RUN 是一回事：
+
+1. **上传**：可一次传多个工作簿，每个工作簿的所有 sheet 都会遍历。这一步只解析和体检，**一次模型调用都不发**——表有问题（ragIndex 重号、步骤编号不连续、路径冲突）先在页面上看到，省下一整轮调用；
+2. **生成**：勾选要跑的场景、选模型，点一次调一轮，进度条按篇更新。一篇失败不影响其余篇；失败的那篇会显示被校验器拦下的原因，重新点"生成"只重跑勾选的那几篇；
+3. **审阅与落盘**：每篇可展开看全文，确认后点"落盘选中项"才写进 skill 目录（只写通过校验的，重复落盘会跳过内容一致的）。也可以只下载单篇 `.md`、打包 zip，或下载改写说明——报告格式与命令行一致，照样能交给 `apply_change_report.py`。
+
+任务只活在内存和一个临时目录里，服务重启就没了：真正要留下来的是落盘的 skill 和下载走的报告。模型地址默认按模型名从 `.env` 解析，`--api-url` 可临时指到别的部署。
+
+```bash
+python3 test_web_server.py     # 端到端跑一遍网页层，不需要内网
+```
+
+这份测试真起服务、真发浏览器那种 multipart 请求传 xlsx、真过校验器、真写文件，只把 `requests.post` 换掉，守住六件事：上传阶段一次模型都不调、生成后能拿到全文、三种下载都对、重复落盘不重复写、违规回复判失败且一个文件都不写出去、坏输入（非 xlsx / 越界的场景号 / 不存在的任务号）落在 4xx。
 
 ---
 
@@ -399,8 +426,10 @@ python3 validate_skills.py skills_distilled/07-27
 | `build_skill_tree.py` | 按实际目录重建树结构 |
 | `extract_display_commands.py` | 抽取 display 查询命令 |
 | `validate_skills.py` | 校验 skill 合规性 |
+| `web_server.py` + `web/index.html` | excel 那条线的网页前端：传 xlsx → 解析体检 → 生成 → 审阅 → 落盘（只用标准库） |
 | `test_excel_skill_format.py` | 逐条验 excel 那条线的校验器（不需要内网） |
 | `mock_run_excel_pipeline.py` | 用假的 HTTP 响应跑通 excel 那条流水线（不需要内网） |
+| `test_web_server.py` | 端到端跑一遍网页前端（不需要内网） |
 
 ## 目录约定
 
