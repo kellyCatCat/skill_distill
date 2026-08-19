@@ -208,6 +208,69 @@ def run() -> int:
               library["groups"][0]["level1"] == first["skill_path"].split("/")[0],
               str(library["groups"]))
 
+        # ---- D2. 人工修改：改生成结果、改已落盘的文件 ----
+        edited_body = first["content"].replace(
+            "# 根因对照表", "人工补充：本场景由值班同事复核过。\n\n# 根因对照表", 1)
+        _, after_edit = client.json("/api/edit", {"job": job["job"], "index": 0,
+                                                  "content": edited_body})
+        view = after_edit["scenarios"][0]
+        check("人工修改被保存且重新校验过",
+              view["edited"] and view["state"] == "ok"
+              and "值班同事复核" in view["content"], str(view)[:200])
+        _, applied2 = client.json("/api/apply", {"job": job["job"], "indexes": [0],
+                                                 "output_dir": output_dir})
+        check("改后的内容能落盘",
+              "值班同事复核" in open(landed, encoding="utf-8").read(),
+              str(applied2["applied"]))
+
+        # 改成不合规的：默认落不了，勾了"允许"才落
+        _, broke = client.json("/api/edit", {"job": job["job"], "index": 0,
+                                             "content": edited_body.replace(
+                                                 "# 根因对照表", "# 根因对照表x", 1)})
+        check("改成不合规会被校验器指出",
+              broke["scenarios"][0]["state"] == "failed"
+              and broke["scenarios"][0]["edited"],
+              str(broke["scenarios"][0].get("failure"))[:120])
+        _, refused = client.json("/api/apply", {"job": job["job"], "indexes": [0],
+                                                "output_dir": output_dir})
+        check("人工改坏了默认仍不落盘",
+              refused["applied"][0]["state"] == "skipped",
+              str(refused["applied"]))
+        _, forced = client.json("/api/apply", {"job": job["job"], "indexes": [0],
+                                               "output_dir": output_dir, "force": True})
+        check("明说之后才落盘，并在回执里记明未通过校验",
+              forced["applied"][0]["state"] == "overwritten"
+              and "未通过校验" in forced["applied"][0]["note"],
+              str(forced["applied"]))
+        # 把磁盘上那份改回合规的，后面的用例还要用它
+        client.json("/api/edit", {"job": job["job"], "index": 0, "content": edited_body})
+        client.json("/api/apply", {"job": job["job"], "indexes": [0],
+                                   "output_dir": output_dir})
+
+        # 已落盘文件：读回来、改一句、写回去
+        status, loaded = client.json(
+            f"/api/skill_file?dir={urllib.parse.quote(output_dir)}"
+            f"&path={urllib.parse.quote(first['skill_path'])}")
+        check("能读回已落盘的skill", status == 200 and loaded["content"].startswith("---"),
+              str(loaded)[:120])
+        status, saved = client.json("/api/skill_file", {
+            "dir": output_dir, "path": first["skill_path"],
+            "content": loaded["content"].replace(
+                "人工补充：本场景由值班同事复核过。", "人工补充：复核后又改了一次。", 1)})
+        check("改已落盘的skill会写回磁盘",
+              saved["saved"] and "又改了一次" in open(landed, encoding="utf-8").read(),
+              str(saved))
+        _, rejected = client.json("/api/skill_file", {
+            "dir": output_dir, "path": first["skill_path"],
+            "content": "没有frontmatter的正文"})
+        check("有ERROR的改动默认不写回",
+              rejected["saved"] is False and rejected["errors"]
+              and "又改了一次" in open(landed, encoding="utf-8").read(),
+              str(rejected))
+        status, escaped = client.json("/api/skill_file", {
+            "dir": output_dir, "path": "../越出去.md", "content": "x"})
+        check("路径越出输出目录被拒", status == 400, str(escaped))
+
         # ---- E. 违规回复：判失败，且不落盘 ----
         REPLY["text"] = BAD_REPLY
         status, bad_job = client.upload([("file", "排障步骤表.xlsx", xlsx)])

@@ -1156,6 +1156,9 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
                   f"- 分支拆解：{r.get('branches_expanded', '')}"]
         if r.get("repaired"):
             lines.append(f"- 自动修复：{r['repaired']}")
+        # 人工改过的要在报告里看得出来：审的人得知道这份不是模型直出的
+        if r.get("edited"):
+            lines.append("- 人工修改：是（在网页上改过正文）")
         if r.get("commands_normalized"):
             pairs = "；".join(
                 f"{c.get('from', '')} → {c.get('to', '')}"

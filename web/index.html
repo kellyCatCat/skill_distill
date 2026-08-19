@@ -67,6 +67,12 @@ pre {
 .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 10px; }
 .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+textarea {
+  width: 100%; min-height: 320px; margin: 10px 0; padding: 12px; font-size: 13px;
+  line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--code-bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; resize: vertical;
+}
 .mono-small { font-size: 12px; color: var(--muted); }
 /* skill 文件名不换行：断成两行之后就不像一个文件名了 */
 #library td:first-child { white-space: nowrap; }
@@ -118,6 +124,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
         <input type="text" id="output">
       </label>
       <button class="primary" id="apply">落盘选中项</button>
+      <label class="note"><input type="checkbox" id="force"> 允许落盘未通过校验的人工修改</label>
       <button id="zip">下载 zip</button>
       <button id="report">下载改写说明</button>
     </div>
@@ -132,6 +139,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
       </label>
       <button id="lib-refresh">刷新</button>
     </div>
+    <div id="landed-editor-slot"></div>
     <div id="library"></div>
   </div>
 </div>
@@ -207,12 +215,56 @@ function renderLibrary(data) {
           <td><code>${esc(skill.name)}</code></td>
           <td class="mono-small">${esc(skill.description) || '（没有 description）'}</td>
           <td class="num mono-small">${skill.sections} 小节｜${skill.chars} 字符</td>
+          <td class="num"><button class="edit-landed" data-path="${esc(skill.path)}">编辑</button></td>
         </tr>`).join('')}</tbody></table>
     </details>`).join('');
   $('library').innerHTML =
     `<p class="note"><code>${esc(data.dir)}</code>：${data.total} 篇，`
     + `${data.groups.length} 个一级目录</p>${groups}`;
   if (JOB) render(JOB);      // 撞名标记要跟着刷新
+}
+
+// 已落盘文件的编辑：读回磁盘上的正文 → 改 → 写回。只能改已经存在的文件，
+// 新建仍然走生成那条路，页面不该变成一个能往任意路径写文件的口子。
+async function editLanded(path) {
+  const dir = $('lib-dir').value;
+  const data = await api(
+    `/api/skill_file?dir=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`);
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<div class="row"><strong>编辑已落盘的 skill</strong>
+      <code>${esc(path)}</code></div>
+    <textarea id="landed-text"></textarea>
+    <div class="row">
+      <button class="primary" id="landed-save">保存到磁盘</button>
+      <button id="landed-cancel">取消</button>
+      <label class="note"><input type="checkbox" id="landed-force"> 有 ERROR 也照存</label>
+      <span class="note" id="landed-note"></span>
+    </div>`;
+  panel.id = 'landed-editor';
+  $('landed-editor-slot').replaceChildren(panel);
+  $('landed-text').value = data.content;
+  $('landed-cancel').onclick = () => panel.remove();
+  $('landed-save').onclick = async () => {
+    try {
+      const out = await api('/api/skill_file', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dir, path, content: $('landed-text').value,
+                              force: $('landed-force').checked}),
+      });
+      const issues = [...out.errors.map((t) => 'ERROR ' + t),
+                      ...out.warns.map((t) => 'WARN ' + t)].join('；');
+      if (out.saved) {
+        $('landed-note').textContent = '已写回磁盘' + (issues ? `（${issues}）` : '');
+        loadLibrary();      // 库里的字符数/描述跟着更新
+      } else {
+        $('landed-note').innerHTML =
+          `<span class="err">${esc('没写：' + issues)}</span>`;
+      }
+    } catch (err) {
+      $('landed-note').innerHTML = `<span class="err">${esc(err.message)}</span>`;
+    }
+  };
 }
 
 async function loadLibrary() {
@@ -254,9 +306,17 @@ function renderCards(job) {
       bits.push(`<p class="note">参数统一：${s.commands_normalized
         .map((c) => esc(`${c.from || ''} → ${c.to || ''}`)).join('；')}</p>`);
     }
+    if (s.edited) bits.push('<p class="note">这一篇在页面上人工改过。</p>');
     if (s.content) {
       bits.push(`<details><summary>查看全文（${s.content.length} 字符）</summary><pre>${
         esc(s.content)}</pre></details>`);
+      bits.push(`<details class="editor"><summary>人工修改</summary>
+        <textarea data-index="${s.index}">${esc(s.content)}</textarea>
+        <div class="row">
+          <button class="primary save-edit" data-index="${s.index}">保存修改</button>
+          <span class="note">保存后会重新跑一遍校验；改完仍不合规也能落盘，
+            但要勾上下面的「允许落盘未通过校验的人工修改」。</span>
+        </div></details>`);
       bits.push(`<p><a href="/api/skill?job=${job.job}&index=${s.index}">下载这一篇</a></p>`);
     }
     return `<div class="panel" style="margin:12px 0">
@@ -292,6 +352,10 @@ async function poll() {
 
 $('category').onchange = describeCategory;
 $('lib-refresh').onclick = loadLibrary;
+$('library').onclick = (e) => {
+  const button = e.target.closest('.edit-landed');
+  if (button) editLanded(button.dataset.path);
+};
 // 改了落盘目录就照着新目录看一遍：撞名与否是相对某个目录说的
 $('output').onchange = () => { $('lib-dir').value = $('output').value; loadLibrary(); };
 
@@ -336,7 +400,8 @@ $('apply').onclick = async () => {
   try {
     const data = await api('/api/apply', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({job: JOB.job, indexes: selected(), output_dir: $('output').value}),
+      body: JSON.stringify({job: JOB.job, indexes: selected(),
+                            output_dir: $('output').value, force: $('force').checked}),
     });
     render(data);
     const lines = data.applied.map(
@@ -346,6 +411,24 @@ $('apply').onclick = async () => {
     loadLibrary();
   } catch (e) {
     $('apply-note').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+};
+
+// 事件委托：卡片是每次渲染重建的，绑在容器上才不会因为重渲染丢掉
+$('cards').onclick = async (e) => {
+  const button = e.target.closest('.save-edit');
+  if (!button) return;
+  const index = Number(button.dataset.index);
+  const box = document.querySelector(`#cards textarea[data-index="${index}"]`);
+  button.disabled = true;
+  try {
+    render(await api('/api/edit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job: JOB.job, index, content: box.value}),
+    }));
+  } catch (err) {
+    alert(err.message);
+    button.disabled = false;
   }
 };
 

@@ -39,10 +39,11 @@ from urllib.parse import parse_qs, urlparse
 from excel_skill_distill_pipeline import (DEFAULT_CATEGORY, DEFAULT_MODEL,
                                           audit_commands, audit_skill_paths,
                                           audit_step_numbers, build_report,
-                                          convert_scenario, derive_skill_path,
-                                          load_scenarios)
+                                          check_skill_format, convert_scenario,
+                                          derive_skill_path, load_scenarios)
 from model_config import MODEL_PROFILES
 from skill_case_merge_pipeline import build_skill_index
+from validate_skills import check_skill_file
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(BASE_DIR, "web", "index.html")
@@ -114,6 +115,7 @@ def scenario_view(job: dict, index: int) -> dict:
         view["branches_expanded"] = result.get("branches_expanded", "")
         view["commands_normalized"] = result.get("commands_normalized", [])
         view["repaired"] = result.get("repaired", "")
+        view["edited"] = bool(result.get("edited"))
         # 三次重试全废时也会留着最后一次的内容：多数只差一两处，人工改比重跑快
         view["needs_manual_fix"] = bool(result.get("needs_manual_fix"))
     return view
@@ -235,15 +237,97 @@ def write_report(job: dict) -> None:
     job["report"] = path
 
 
-def apply_results(job: dict, indexes: list, output_dir: str) -> list:
+def edit_result(job: dict, index: int, content: str) -> dict:
+    """把页面上改过的正文存回这一篇，并重新跑一遍校验。
+
+    模型的产出常常只差一两处（少个反引号、多了一条编造的命令），改这一两处比重跑
+    一整轮划算得多。改完仍然过一遍校验器：不是为了拦住人，而是让人知道自己改完之后
+    这篇算不算合规——落盘时按这个结果区别对待。
+    """
+    scenario = job["scenarios"][index]
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("改后的内容是空的")
+    result = job["results"].get(index) or {
+        "scenario": scenario["name"],
+        "skill_path": derive_skill_path(scenario, job["category"]),
+        "steps": len(scenario["steps"]), "rows": scenario["rows"]}
+    result["content"] = content
+    result["edited"] = True
+    # 人工改过之后，之前那条失败原因就过期了：重新判一次，两个字段一起更新
+    result.pop("error", None)
+    result.pop("needs_manual_fix", None)
+    result["invalid"] = check_skill_format(content, scenario)
+    with JOBS_LOCK:
+        job["results"][index] = result
+    write_report(job)
+    return result
+
+
+def edit_landed_skill(directory: str, rel_path: str, content: str,
+                      force: bool = False) -> dict:
+    """改写已经落盘的 skill 文件。
+
+    落盘之后才发现要改一句话，是常事。这里只允许改**已经存在**的文件：新建走生成
+    那条路，否则页面就成了一个能往任意路径写文件的口子。
+
+    校验用 `validate_skills.check_skill_file`（就是命令行校验整个 skill 库用的
+    那个），它按文件校验，所以先写到同目录的临时文件上再判——有 ERROR 就不落，
+    除非调用方明说要强落。
+    """
+    root = os.path.abspath(directory)
+    path = os.path.abspath(os.path.join(root, *rel_path.split("/")))
+    if os.path.commonpath([root, path]) != root or not path.endswith(".md"):
+        raise ValueError(f"路径不合法: {rel_path}")
+    if not os.path.isfile(path):
+        raise ValueError(f"文件不存在，只能改已经落盘的 skill: {rel_path}")
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("改后的内容是空的")
+
+    known = {os.path.relpath(os.path.join(root_dir, name), root).replace(os.sep, "/")
+             for root_dir, _, names in os.walk(root)
+             for name in names if name.endswith(".md")}
+    # 先写到同目录的临时文件上再校验，通过了才顶替原文件：校验器按文件工作，
+    # 而"校验没过就不该动原文件"必须是硬的——os.replace 是原子的，中途失败也
+    # 不会留下半份内容。
+    temp = path + ".editing"
+    with open(temp, "w", encoding="utf-8") as f:
+        f.write(content + "\n")
+    try:
+        issues = check_skill_file(temp, known_paths=known)
+        errors = [desc for level, desc in issues if level == "ERROR"]
+        warns = [desc for level, desc in issues if level == "WARN"]
+        if errors and not force:
+            return {"saved": False, "path": rel_path,
+                    "errors": errors, "warns": warns}
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):      # 拒绝落盘或中途出错时，临时文件不留下
+            os.remove(temp)
+    return {"saved": True, "path": rel_path, "errors": errors, "warns": warns}
+
+
+def apply_results(job: dict, indexes: list, output_dir: str,
+                  force: bool = False) -> list:
     """把选中的、且校验通过的几篇写进 skill 目录，返回逐篇结果。"""
     root = os.path.abspath(output_dir)
     applied = []
     for index in indexes:
         result = job["results"].get(index)
-        if not result or result.get("error") or result.get("invalid"):
+        if not result or not result.get("content"):
             applied.append({"index": index, "state": "skipped",
-                            "note": "没有通过校验，不落盘"})
+                            "note": "还没有生成内容"})
+            continue
+        failure = result.get("error") or result.get("invalid")
+        # 模型直出的违规内容一律不落盘；人工改过的可以，但要调用方明说——
+        # 改的人自己就是判断依据，校验器的意见仍然记进报告，不悄悄放行
+        if failure and not (force and result.get("edited")):
+            applied.append({"index": index, "state": "skipped",
+                            "note": ("没有通过校验，不落盘"
+                                     if not result.get("edited") else
+                                     "人工改过但仍未通过校验；要落盘请勾选"
+                                     "「允许落盘未通过校验的人工修改」")})
             continue
         rel = result["skill_path"]
         path = os.path.abspath(os.path.join(root, *rel.split("/")))
@@ -262,9 +346,13 @@ def apply_results(job: dict, indexes: list, output_dir: str) -> list:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+        note = "覆盖了同名文件" if existed else "已新建"
+        if failure:
+            note += f"（人工修改，未通过校验：{failure}）"
+        elif result.get("edited"):
+            note += "（人工修改过）"
         applied.append({"index": index, "state": "overwritten" if existed else "created",
-                        "path": rel,
-                        "note": "覆盖了同名文件" if existed else "已新建"})
+                        "path": rel, "note": note})
     job["output_dir"] = output_dir
     write_report(job)
     return applied
@@ -381,6 +469,16 @@ class Handler(BaseHTTPRequestHandler):
                                        "default": DEFAULT_MODEL,
                                        "default_category": DEFAULT_CATEGORY,
                                        "default_output": self.server.default_output})
+            if url.path == "/api/skill_file":
+                directory = query.get("dir", [""])[0] or self.server.default_output
+                rel = query.get("path", [""])[0]
+                path = os.path.abspath(os.path.join(
+                    os.path.abspath(directory), *rel.split("/")))
+                if os.path.commonpath([os.path.abspath(directory), path]) \
+                        != os.path.abspath(directory) or not os.path.isfile(path):
+                    return self.fail(f"找不到这个 skill: {rel}", 404)
+                return self.send_json({"path": rel,
+                                       "content": open(path, encoding="utf-8").read()})
             if url.path == "/api/skills":
                 return self.send_json(skill_library(
                     query.get("dir", [""])[0] or self.server.default_output))
@@ -424,6 +522,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.handle_upload()
             if url.path == "/api/generate":
                 return self.handle_generate()
+            if url.path == "/api/edit":
+                return self.handle_edit()
+            if url.path == "/api/skill_file":
+                return self.handle_edit_landed()
             if url.path == "/api/apply":
                 return self.handle_apply()
             return self.fail("没有这个地址", 404)
@@ -492,6 +594,25 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[generate] {job['id'][:8]} {len(indexes)} 个场景 @ {model}")
         return self.send_json(job_view(job))
 
+    def handle_edit(self):
+        payload = self.json_body()
+        job = get_job(payload.get("job"))
+        indexes = self.indexes_from(job, [payload.get("index")])
+        result = edit_result(job, indexes[0], payload.get("content"))
+        print(f"[edit] {job['id'][:8]} 第{indexes[0]}个场景 "
+              f"→ {'仍不合规: ' + result['invalid'] if result['invalid'] else '校验通过'}")
+        return self.send_json(job_view(job))
+
+    def handle_edit_landed(self):
+        payload = self.json_body()
+        outcome = edit_landed_skill(
+            (payload.get("dir") or "").strip() or self.server.default_output,
+            payload.get("path") or "", payload.get("content"),
+            force=bool(payload.get("force")))
+        print(f"[edit-landed] {outcome['path']}: "
+              f"{'已写入' if outcome['saved'] else '有ERROR，未写入'}")
+        return self.send_json(outcome)
+
     def handle_apply(self):
         payload = self.json_body()
         job = get_job(payload.get("job"))
@@ -499,7 +620,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("这个任务正在生成中，等它跑完再落盘")
         indexes = self.indexes_from(job, payload.get("indexes"))
         output_dir = (payload.get("output_dir") or "").strip() or self.server.default_output
-        applied = apply_results(job, indexes, output_dir)
+        applied = apply_results(job, indexes, output_dir,
+                                force=bool(payload.get("force")))
         print(f"[apply] {job['id'][:8]} → {output_dir}: " +
               "、".join(f"{a['state']} {a.get('path', '')}" for a in applied))
         return self.send_json({"output_dir": os.path.abspath(output_dir),
