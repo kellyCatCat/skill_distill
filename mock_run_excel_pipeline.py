@@ -9,8 +9,9 @@
 
 覆盖三种情形：
   A. 合规回复 + 普通JSON响应
-  B. 合规回复 + SSE流响应（MiniMax那个部署无视 stream=False，实际就返回SSE；
-     跑这条是为了确认流被拼回来之后与普通JSON路径逐字一致、中文不乱码）
+  B. 合规回复 + SSE流响应（有的部署无视 stream=False 一律返回SSE；跑这条是为了
+     确认流被拼回来之后与普通JSON路径逐字一致、中文不乱码，顺带覆盖会思考的模型
+     那条分支）
   C. 违规回复（命令没用反引号、参数是花括号）——必须被 extractor 拦住并重试到失败，
      且一个文件都不许写出去
   D. 先违规后合规——校验失败时要把原因回传给模型（而不是把同一份prompt再发一遍），
@@ -27,9 +28,17 @@ import shutil
 import sys
 import tempfile
 
+import model_config
 import skill_self_distill_pipeline as distill
 import excel_skill_distill_pipeline as pipeline
 from test_excel_skill_format import GOOD
+
+# 在册的模型现在都不开思考（会思考的那批已下线），但 thinking=True 的分支还在代码
+# 里——payload 里不发关思考的 chat_template_kwargs。临时登记一个只在本测试里存在的
+# 模型来覆盖它，否则这条分支会跟着模型一起没人测，将来接入会思考的模型时才发现坏了。
+THINKING_MODEL = "mock-thinking-model"
+model_config.MODEL_PROFILES[THINKING_MODEL] = {
+    "env_prefix": "QWEN", "thinking": True, "max_tokens": 32768}
 
 # 不会真的被访问到：requests.post 已被替换，这里只是让 resolve_model 不去读 .env
 MOCK_URL = "http://mock.invalid/v1/chat/completions"
@@ -83,14 +92,41 @@ class FakeResponse:
         return self._json
 
 
+LAST_PAYLOAD = {}
+
+
 def install_mock(reply: str, sse: bool):
     def fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        LAST_PAYLOAD.clear()
+        LAST_PAYLOAD.update(json or {})
         return FakeResponse(reply, sse)
     distill.requests.post = fake_post
 
 
+def check_thinking_payload() -> list:
+    """确认关思考的字段确实按模型区分：不开思考的发，会思考的不发。
+
+    单独在主进程里直接调一次 call_model_with_retry，而不是从上面几轮里取——改写
+    跑在 Pool 的子进程里，它发出去的 payload 父进程看不到。
+    """
+    print("\n" + "#" * 72)
+    print("# E. 关思考的字段按模型区分")
+    print("#" * 72)
+    failures = []
+    install_mock(GOOD_REPLY, sse=False)
+    for model, should_send in (("qwen3.8-27b", True), (THINKING_MODEL, False)):
+        distill.call_model_with_retry(MOCK_URL, model, "问", extractor=lambda text: text)
+        sent = "chat_template_kwargs" in LAST_PAYLOAD
+        print(f"  {model}: {'发了' if sent else '没发'} chat_template_kwargs"
+              f"（应当{'发' if should_send else '不发'}）")
+        if sent != should_send:
+            failures.append(
+                f"E {model} {'不该' if sent else '应当'}收到关思考的 chat_template_kwargs")
+    return failures
+
+
 def run(label: str, reply: str, sse: bool, workdir: str,
-        model: str = "qwen3.6-27b") -> tuple:
+        model: str = "qwen3.8-27b") -> tuple:
     """跑一轮，返回 (退出码, 报告路径)。
 
     model 决定 payload 走哪条分支：不开思考的模型会多发一个关思考的
@@ -146,7 +182,7 @@ def check_repair_loop() -> list:
     distill.requests.post = fake_post
     scenario = pipeline.parse_sheet(XLSX_PATH)[0]
     result = distill.call_model_with_retry(
-        MOCK_URL, "qwen3.6-27b", "原始提问",
+        MOCK_URL, "qwen3.8-27b", "原始提问",
         extractor=pipeline.make_extractor(scenario),
         retry_prompt=pipeline.repair_prompt, retry_delay=0)
 
@@ -183,10 +219,10 @@ def main(which: str):
             if code != 0:
                 failures.append("A 合规回复应当成功，实际退出码非0")
         if which in ("all", "sse"):
-            # SSE 是 MiniMax 那个部署的形态，所以这条特意用它——顺带覆盖
-            # thinking=True 时不发 chat_template_kwargs 的那条分支
+            # 这条特意用会思考的模型：顺带覆盖 thinking=True 时不发
+            # chat_template_kwargs 的那条分支
             code, report = run("B. 合规回复 / SSE流", GOOD_REPLY, True,
-                               os.path.join(workdir, "b"), model="MiniMax-M2.7")
+                               os.path.join(workdir, "b"), model=THINKING_MODEL)
             bodies["sse"] = skill_body(report)
             if code != 0:
                 failures.append("B SSE流应当成功，实际退出码非0")
@@ -209,6 +245,9 @@ def main(which: str):
         if which in ("all", "repair"):
             failures += check_repair_loop()
 
+        if which == "all":
+            failures += check_thinking_payload()
+
         if "json" in bodies and "sse" in bodies:
             if bodies["json"] != bodies["sse"]:
                 failures.append("SSE拼回的正文与普通JSON路径不一致")
@@ -220,8 +259,9 @@ def main(which: str):
             for item in failures:
                 print(f"[FAIL] {item}")
         else:
-            print("[OK] 四种情形均符合预期：合规回复能产出skill，SSE与JSON逐字一致，"
-                  "违规回复被拦下且未落盘，校验失败会带着原因重问并在第二次通过")
+            print("[OK] 全部符合预期：合规回复能产出skill，SSE与JSON逐字一致，"
+                  "违规回复被拦下且未落盘，校验失败会带着原因重问并在第二次通过，"
+                  "关思考的字段按模型区分")
         return 1 if failures else 0
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

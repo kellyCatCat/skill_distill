@@ -601,14 +601,17 @@ if __name__ == "__main__":
         # 地址与密钥从 .env 按模型名解析（见 model_config.py），不必写死在这里；
         # 要临时指向别的部署时才传 API_URL。
         API_URL=None,
-        # 这条流水线要做因果定位（评测里的哪一步判据误导了agent）再整篇重写skill。
-        # 一度默认用 MiniMax-M2.7-thinking，但在 BGP AS号不匹配 那条评测上实测下来
-        # 它最差：耗时是 qwen 的11.8倍，只给2条fix、且两条都依赖BGP错误码——而该
-        # 评测的现场TCP都没建起来、根本不会产生NOTIFICATION，改完照样卡在原地；
-        # 其中一条还把 Bad Peer AS 的 Error Code 写成了1（应为2）。
-        # MiniMax-M2.7 覆盖最全（4条fix，含删除"eBGP AS号必须不同"这句会放行的判据）
-        # 且错误码写对，192秒也可接受。换模型只需改这里。
-        MODEL_NAME="MiniMax-M2.7",
+        # 这条流水线要做因果定位（评测里的哪一步判据误导了agent）再整篇重写skill，
+        # 是几条线里最吃推理的一条。曾经为此单独用过别的模型，现在全项目统一到
+        # qwen3.8-27b（其余模型已不再提供）。换模型只需改这里。
+        #
+        # 那轮对比留下的结论仍然有效，将来再选模型时值得记着：推理更重不等于更好。
+        # 在 BGP AS号不匹配 那条评测上，thinking 档耗时是非 thinking 的11.8倍，
+        # 只给2条fix、且两条都依赖BGP错误码——而该评测的现场TCP都没建起来、根本
+        # 不会产生NOTIFICATION，改完照样卡在原地；其中一条还把 Bad Peer AS 的
+        # Error Code 写成了1（应为2）。选型要看 fixes 有没有点到评测暴露的那处判据，
+        # 而不是看谁想得久（用 compare_models.py 并排比）。
+        MODEL_NAME="qwen3.8-27b",
         WORKERS=3,
         # 变更说明写在skill目录外，避免被validate_skills.py当成skill校验
         REPORT_PATH=f"reports/skill_optimize_report_{datetime.now().strftime('%m-%d')}.md",
@@ -619,7 +622,7 @@ if __name__ == "__main__":
         CHECK_ONLY="--check" in sys.argv[1:],
         # 留空用该模型在 model_config 里的预算；整篇重写撞上限时在这里单独调大
         MAX_TOKENS=None,
-        # 整篇重写一篇skill实测约200秒（MiniMax-M2.7）；留三倍余量。
+        # 整篇重写一篇skill实测约200秒；留三倍余量。
         # 换成推理更重的模型要相应调大，否则会在生成完之前就超时。
         TIMEOUT=600,
     )

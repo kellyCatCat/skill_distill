@@ -8,7 +8,8 @@
 
 为什么要按模型分别配 thinking：原先payload里写死了
 `chat_template_kwargs={"enable_thinking": False}`——那是给qwen关思考用的，
-套到 MiniMax-M2.7-thinking 上会把思考压掉，等于花大模型的钱拿小模型的输出。
+发给会思考的模型会把思考压掉，等于花大模型的钱拿小模型的输出。当前登记的都是
+不开思考的qwen，但这套区分要留着：换上会思考的模型时，忘了它就白花钱。
 
 用法：
   python3 model_config.py                    # 打印已登记模型的配置（密钥打码），自查用
@@ -28,9 +29,9 @@ ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 # 每个模型的调用参数。base_url / api_key / max_tokens 从 .env 里按这些环境变量名取。
 #
-# max_tokens：thinking模型的推理token也算进输出预算，而评测优化要整篇重写
-# 近万字符的skill，16384不够用，所以thinking档给到32768。撞上限会报
-# finish_reason=length，按报错调大即可。
+# max_tokens：撞上限会报 finish_reason=length，按报错调大即可（.env 里的
+# <前缀>_MAX_TOKENS 优先于这里）。评测优化要整篇重写近万字符的skill，是最吃
+# 预算的一条线，不够用时先调它。
 #
 # thinking=False 时才发送关思考的 chat_template_kwargs；thinking=True 时
 # 整个字段都不发，让模型按自己的默认行为思考——不猜各家开思考的字段名。
@@ -49,21 +50,13 @@ MODEL_PROFILES = {
         "thinking": False,
         "max_tokens": 16384,
     },
-    # 实测（python3 model_config.py --probe）这个部署的非thinking变体同样返回
-    # reasoning_content——关思考的 chat_template_kwargs 在它上面不起作用。既然
-    # 发了也没用、而推理照样吃输出预算，就按"会思考"登记：不发那个无效字段，
-    # 预算也留够。
-    "MiniMax-M2.7": {
-        "env_prefix": "MINIMAX",
-        "thinking": True,
-        "max_tokens": 32768,
-    },
-    "MiniMax-M2.7-thinking": {
-        "env_prefix": "MINIMAX",
-        "thinking": True,
-        "max_tokens": 32768,
-    },
 }
+
+# 会思考的模型怎么登记（现在一个都没有，将来加的时候照这个写）：
+#     "<模型名>": {"env_prefix": "<.env里那组变量的前缀>",
+#                  "thinking": True, "max_tokens": 32768},
+# thinking=True 时整个关思考的字段都不发，让模型按自己的默认行为思考——不猜各家
+# 开思考的字段名；推理token也占输出预算，所以那档预算要留够。
 
 # 没登记的模型名按这个兜底，仍可用 api_url 参数直接指定地址
 DEFAULT_PROFILE = {"env_prefix": "QWEN", "thinking": False, "max_tokens": 16384}

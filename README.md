@@ -61,14 +61,14 @@ python3 model_config.py
 ```
 
 ```
-● MiniMax-M2.7
-    地址      : http://127.0.0.1:4002/v1/chat/completions
+● qwen3.8-27b
+    地址      : http://127.0.0.1:2207/v1/chat/completions
     密钥      : sk-cac-…4pS7（54字符）
-    max_tokens: 32768
-    思考      : 会思考（不发关思考的字段，预算已留给推理）
+    max_tokens: 16384
+    思考      : 关
 ```
 
-密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给会思考的模型，要么把思考压掉、要么根本不起作用，所以这类模型完全不发这个字段。注意"会思考"是按实测登记的——`MiniMax-M2.7` 虽然名字里没有 thinking，实测同样返回 `reasoning_content`，推理照样吃输出预算。
+密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给会思考的模型，要么把思考压掉、要么根本不起作用，所以那类模型完全不发这个字段。当前在册的都是不开思考的 qwen，但这套区分要留着——接入会思考的模型时忘了它，就是花大模型的钱拿小模型的输出。"是不是会思考"按实测登记，不看名字：曾经在册的一个模型名字里没有 thinking，实测照样返回 `reasoning_content`，推理照样吃输出预算。
 
 ### 3. 探测链路是否真的通（建议先跑）
 
@@ -129,7 +129,7 @@ python3 excel_skill_distill_pipeline.py --check
 
 # 2. 改写，出报告（默认 DRY-RUN，不写 skill 文件）
 python3 excel_skill_distill_pipeline.py
-python3 excel_skill_distill_pipeline.py --model MiniMax-M2.7   # 临时换模型
+python3 excel_skill_distill_pipeline.py --model <模型名>       # 临时换模型
 
 # 3. 人工审 reports/excel_skill_report_<mm-dd>.md，确认无误后落盘
 python3 apply_change_report.py reports/excel_skill_report_08-18.md skills_from_excel/08-18 --diff
@@ -343,24 +343,23 @@ prompt 里内置了定位方法，这是这条流水线的核心：
 同一批评测跑多个模型并排比较，全程 DRY-RUN。
 
 ```bash
-python3 compare_models.py                                                  # 比较默认两个模型
-python3 compare_models.py qwen3.6-27b MiniMax-M2.7 MiniMax-M2.7-thinking   # 指定
+python3 compare_models.py                            # 只跑默认模型，出一份基线
+python3 compare_models.py qwen3.8-27b <候选模型>      # 有候选时才比得出东西
 ```
 
 ```
 模型                    skill              判定        篇幅          保留   小节   fixes  秒
-qwen3.6-27b             ...BGP故障案例.md   optimized   9609→10168    106%   5→5    3      119.9
-MiniMax-M2.7            ...BGP故障案例.md   optimized   9609→9956     104%   5→5    4      192.3
-MiniMax-M2.7-thinking   ...BGP故障案例.md   optimized   9609→9883     103%   5→5    2      1411.4
+qwen3.8-27b             ...BGP故障案例.md   optimized   9609→10168    106%   5→5    3      119.9
+<某个thinking模型>       ...BGP故障案例.md   optimized   9609→9883     103%   5→5    2      1411.4
 ```
 
 各模型的报告分别写到 `reports/skill_optimize_report_<mm-dd>_<模型名>.md`，可以并排读改动内容。
 
 **数字之外必须人工看的**：报告里的 `fixes` 有没有点到评测真正暴露的那处判据——点不到就是没看懂，篇幅和小节数再漂亮也不算过。
 
-**当前的模型分工**：评测优化默认用 `MiniMax-M2.7`；其余流水线调用量大、重跑便宜，用 `qwen3.6-27b`。
+**当前的模型分工**：四条流水线统一用 `qwen3.8-27b`——曾经为评测优化单独选过别的模型，那批模型现在不再提供了。要换回按线分工，改各脚本末尾 `main()` 里的 `MODEL_NAME`（excel 那条是 `DEFAULT_MODEL`，也可用 `--model` 临时覆盖）。
 
-**一次实测结论（BGP AS号不匹配 那条评测）**：一度按"最吃推理就该上 thinking"把默认设成 `MiniMax-M2.7-thinking`，实测下来它最差——慢 11.8 倍，只给 2 条 fix，两条都依赖 BGP 错误码，而该评测现场 TCP 都没建起来、根本不会产生 NOTIFICATION，改完 agent 照样卡住；其中一条还把 Bad Peer AS 的 Error Code 写成 1（应为 2）。`MiniMax-M2.7` 覆盖最全（4 条，含明确删除"eBGP AS号必须不同"这句会放行的判据）且错误码正确。**推理强度不等于这个任务上的产出质量**——所以才需要这个对比入口，而不是照着模型规格挑。
+**一次实测结论（BGP AS号不匹配 那条评测），留着给下次选型**：一度按"最吃推理就该上 thinking"把评测优化的默认设成一个 thinking 模型，实测下来它最差——慢 11.8 倍，只给 2 条 fix，两条都依赖 BGP 错误码，而该评测现场 TCP 都没建起来、根本不会产生 NOTIFICATION，改完 agent 照样卡住；其中一条还把 Bad Peer AS 的 Error Code 写成 1（应为 2）。非 thinking 的那档反而覆盖最全（含明确删除"eBGP AS号必须不同"这句会放行的判据）且错误码正确。**推理强度不等于这个任务上的产出质量**——所以才需要这个对比入口，而不是照着模型规格挑。
 
 ---
 

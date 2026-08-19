@@ -14,8 +14,8 @@
 对着读改动内容。全程DRY-RUN，不会写任何skill文件。
 
 用法：
-  python3 compare_models.py                                   # 比较默认的两个模型
-  python3 compare_models.py qwen3.6-27b MiniMax-M2.7-thinking  # 指定要比的模型
+  python3 compare_models.py                        # 只跑默认模型，出一份基线
+  python3 compare_models.py qwen3.8-27b <候选模型>  # 指定要比的模型
 """
 import os
 import re
@@ -26,7 +26,9 @@ from datetime import datetime
 from model_config import MODEL_PROFILES, resolve_model
 from skill_eval_optimize_pipeline import main as optimize_main
 
-DEFAULT_MODELS = ["qwen3.6-27b", "MiniMax-M2.7"]
+# 现在全项目只用 qwen3.8-27b，不带参数跑就只出它这一份基线。有候选模型时把两个
+# 名字都写在命令行上，这个脚本的用处才体现得出来。
+DEFAULT_MODELS = ["qwen3.8-27b"]
 
 EVALS_PATH = "evals"
 SKILL_DIR = "skills_distilled/07-27"

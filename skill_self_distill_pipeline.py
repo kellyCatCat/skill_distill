@@ -30,7 +30,7 @@ def parse_sse_stream(text: str) -> tuple:
     """把SSE流拼回 (正文, 推理内容, finish_reason)。
 
     有的端点无视 `stream: False`，一律返回 text/event-stream（本项目里
-    MiniMax 那个部署就是这样），响应体形如：
+    本项目遇到过的一个部署就是这样），响应体形如：
         data: {"choices":[{"delta":{"content":"…","reasoning_content":"…"},…}]}
         data: [DONE]
     正文与推理分别累加；最后一个非空的 finish_reason 为准。个别端点在收尾那条
@@ -605,7 +605,7 @@ if __name__ == "__main__":
         SOURCE_TREE_DIR="result/v01/tree",
         OUTPUT_DIR=f"skills_distilled/{datetime.now().strftime('%m-%d')}",
         API_URL="http://76.64.185.52:2207/v1/chat/completions",
-        MODEL_NAME="qwen3.6-27b",
+        MODEL_NAME="qwen3.8-27b",
         WORKERS=3,
         # GROUPS=None 表示处理全部分组；只想跑部分分组时，
         # 传入按'一级目录/二级目录'子串匹配的名称列表，例如：

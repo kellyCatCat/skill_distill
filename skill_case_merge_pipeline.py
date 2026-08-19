@@ -736,7 +736,7 @@ if __name__ == "__main__":
         CASES_PATH="cases/故障补充场景.json",
         SKILL_DIR="skills_distilled/07-16",
         API_URL="http://76.64.185.52:2207/v1/chat/completions",
-        MODEL_NAME="qwen3.6-27b",
+        MODEL_NAME="qwen3.8-27b",
         WORKERS=3,
         # 变更说明写在skill目录外，避免被validate_skills.py当成skill校验
         REPORT_PATH=f"reports/skill_change_report_{datetime.now().strftime('%m-%d')}.md",

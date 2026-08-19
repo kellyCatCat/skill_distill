@@ -24,7 +24,7 @@
 用法：
   python3 excel_skill_distill_pipeline.py --check              # 只解析和体检，不调模型
   python3 excel_skill_distill_pipeline.py                      # 按文件末尾 main() 的默认参数运行
-  python3 excel_skill_distill_pipeline.py --model qwen3.6-27b  # 临时换模型（默认见 DEFAULT_MODEL）
+  python3 excel_skill_distill_pipeline.py --model <模型名>      # 临时换模型（默认见 DEFAULT_MODEL）
   python3 excel_skill_distill_pipeline.py --validate <skill.md> # 单独校验已有的skill文件
 """
 import json
@@ -1337,8 +1337,8 @@ if __name__ == "__main__":
         # 改写要拆分支、统一参数、还要顾及跨步骤的命令复用。这个任务是"照着已有判据
         # 重写"而不是"从散文里提炼判据"，未必吃推理，所以用调用量大、重跑便宜的 qwen。
         # 临时换模型不必改这里，命令行加 --model <模型名> 即可。
-        # 注意各档的输出预算不同（qwen 16384、MiniMax 32768），场景步骤多时若撞上
-        # finish_reason=length，用下面的 MAX_TOKENS 单独调大。
+        # 场景步骤多时若撞上 finish_reason=length，用下面的 MAX_TOKENS 单独调大
+        # （或改 .env 里的 QWEN_MAX_TOKENS）。
         MODEL_NAME=MODEL_NAME,
         WORKERS=3,
         REPORT_PATH=f"reports/excel_skill_report_{datetime.now().strftime('%m-%d')}.md",
