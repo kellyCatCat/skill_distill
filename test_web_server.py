@@ -20,6 +20,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -107,6 +108,98 @@ def wait_done(client: Client, job_id: str, timeout: int = 120) -> dict:
 
 
 CHECKS = []
+
+# 页面里那个 markdown 渲染器的回归。它是纯字符串进、字符串出的函数，所以有 node
+# 就能直接验；没有 node（内网机器多半没有）就跳过——这份测试的其余部分不该因此跑不了。
+MARKDOWN_ASSERTIONS = """
+// node 的 argv[0] 是 node、argv[1] 是脚本路径，传进来的样例是 argv[2]
+const out = renderMarkdown(process.argv[2]);
+const want = [
+  // 空行不该把有序列表关掉再开：关了会让编号从1重新数，"步骤2"就显示成"步骤1"
+  ["一个ol装下被空行隔开的条目", (out.match(/<ol>/g) || []).length === 1],
+  ["三个条目都在", (out.match(/<li>/g) || []).length === 3],
+  ["表格渲染成table", out.includes("<table>") && (out.match(/<td>/g) || []).length === 4],
+  // 单元格里的 \\| 是转义过的管道符，不能被当成列分隔
+  ["转义的管道符没把单元格切碎", out.includes("display paf | include X")],
+  // 正文里的 <参数> 必须原样显示，不能被浏览器当成标签吞掉
+  ["尖括号参数被转义", out.includes("&lt;endpoint-ipv6&gt;")],
+  ["frontmatter单独成块", out.includes('<div class="fm">')],
+  ["围栏代码块", out.includes("<pre>")],
+  ["行内代码", out.includes("<code>")],
+];
+console.log(JSON.stringify(want));
+"""
+
+MARKDOWN_SAMPLE = """---
+name: demo-skill
+description: 一句话简介
+---
+
+# 入参列表
+
+| 信息 | 说明 |
+| --- | --- |
+| 网元ID | 用于登录 |
+| 端口 | `display paf \\| include X` |
+
+## 前置检查
+
+1. **第一步**：执行 `display srv6-te policy endpoint <endpoint-ipv6>`
+
+2. **第二步**：看回显
+
+3. **第三步**：结束
+
+```
+undo shutdown
+```
+"""
+
+
+def js_snippet(script: str, marker: str) -> str:
+    """从页面脚本里抠出一个函数。
+
+    按大括号配对取，而不是"切到下一个函数名之前"——最后一个函数后面跟的是绑事件的
+    DOM 代码，按名字切会把它一起带进 node，一跑就报 document is not defined。
+    """
+    start = script.index(marker)
+    if marker.startswith("function"):
+        depth, i = 0, script.index("{", start)
+        while i < len(script):
+            depth += (script[i] == "{") - (script[i] == "}")
+            if depth == 0:
+                return script[start:i + 1]
+            i += 1
+        raise ValueError(f"{marker} 的大括号没有配平")
+    return script[start:script.index(";\n", start) + 1]      # 箭头函数，到分号为止
+
+
+def check_markdown_renderer() -> None:
+    """把 index.html 里的渲染器抠出来，用 node 跑一遍断言。"""
+    if not shutil.which("node"):
+        print("[SKIP] markdown渲染器（没有 node，跳过）")
+        return
+    page = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "web", "index.html"), encoding="utf-8").read()
+    script = page.split("<script>")[1].split("</script>")[0]
+    # 渲染器只依赖 esc()，把这几个函数原样取出来即可，不必把整个页面搬进 node
+    parts = [js_snippet(script, name) for name in
+             ("const esc =", "function mdInline", "function mdCells",
+              "function renderMarkdown")]
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as f:
+        f.write("\n".join(parts) + MARKDOWN_ASSERTIONS)
+        js_path = f.name
+    try:
+        proc = subprocess.run(["node", js_path, MARKDOWN_SAMPLE],
+                              capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            check("markdown渲染器能跑起来", False, proc.stderr.strip()[:300])
+            return
+        for label, ok in json.loads(proc.stdout):
+            check(f"markdown渲染：{label}", ok)
+    finally:
+        os.unlink(js_path)
 
 
 def check(label: str, condition, detail: str = "") -> None:
@@ -304,6 +397,8 @@ def run() -> int:
         # ---- multipart 解析器：二进制正文要一字节不差 ----
         body, ctype = multipart([("category", "排障步骤")],
                                 [("file", "表.xlsx", xlsx)])
+        check_markdown_renderer()
+
         parts = web_server.parse_multipart(body, ctype)
         check("multipart 解析出字段与文件", len(parts) == 2)
         check("xlsx 字节原样还原",

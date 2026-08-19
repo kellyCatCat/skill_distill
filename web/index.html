@@ -76,6 +76,19 @@ textarea {
 .mono-small { font-size: 12px; color: var(--muted); }
 /* skill 文件名不换行：断成两行之后就不像一个文件名了 */
 #library td:first-child { white-space: nowrap; }
+.md { font-size: 14px; }
+.md h2 { font-size: 17px; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 15px; margin: 16px 0 6px; }
+.md h4, .md h5, .md h6 { font-size: 14px; margin: 12px 0 4px; }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md table { margin: 10px 0; display: block; overflow-x: auto; }
+.md pre { margin: 8px 0; }
+.md .fm, .fm {
+  background: var(--code-bg); border-left: 3px solid var(--accent); border-radius: 6px;
+  padding: 10px 12px; font-size: 13px; color: var(--muted); margin-bottom: 12px;
+}
 </style>
 </head>
 <body>
@@ -168,6 +181,99 @@ function selected() {
     .map((box) => Number(box.value));
 }
 
+// 够用的 markdown 渲染：skill 就是 frontmatter + 标题 + 列表 + 表格 + 代码这几样，
+// 为这点东西引一个库不值当（内网也拉不到 CDN）。先整体转义再往里插我们自己生成的
+// 标签，所以正文里的 `<endpoint-ipv6>` 只会被当字符显示，不会变成标签。
+function mdInline(text) {
+  return text
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+}
+
+// 表格单元格里的管道符是转义过的（`\|`），按 | 切之前要先把它藏起来，
+// 否则一条 `display paf \| include XXX` 会被切成两格
+function mdCells(row) {
+  return row.replace(/^\||\|$/g, '').replace(/\\\|/g, '\u0000')
+    .split('|').map((cell) => mdInline(cell.trim().replace(/\u0000/g, '|')));
+}
+
+function renderMarkdown(source) {
+  const lines = esc(source).split('\n');
+  const out = [];
+  const stack = [];
+  const closeLists = () => { while (stack.length) out.push(`</${stack.pop()}>`); };
+  let i = 0;
+
+  // frontmatter 单独渲染成一个小块：它是给 agent 读的元信息，不是正文
+  if (lines[0] && lines[0].trim() === '---') {
+    const end = lines.indexOf('---', 1);
+    if (end > 0) {
+      out.push(`<div class="fm">${lines.slice(1, end).map(mdInline).join('<br>')}</div>`);
+      i = end + 1;
+    }
+  }
+
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith('```')) {              // 围栏代码块
+      closeLists();
+      const buffer = [];
+      for (i++; i < lines.length && !lines[i].trim().startsWith('```'); i++) {
+        buffer.push(lines[i]);
+      }
+      out.push(`<pre>${buffer.join('\n')}</pre>`);
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      closeLists();
+      // 整体降一级：卡片里已经有标题了，正文的 # 再当 h1 会喧宾夺主
+      out.push(`<h${Math.min(heading[1].length + 1, 6)}>${mdInline(heading[2])}` +
+               `</h${Math.min(heading[1].length + 1, 6)}>`);
+      continue;
+    }
+
+    const next = lines[i + 1] || '';
+    if (trimmed.startsWith('|') && /^\s*\|[\s:|-]+\|\s*$/.test(next)) {
+      closeLists();
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(lines[i].trim());
+        i++;
+      }
+      i--;                       // 循环末尾还会 i++，这里退回最后一行表格行
+      const body = rows.slice(2)  // 0 是表头，1 是 |---|---| 分隔行
+        .map((row) => `<tr>${mdCells(row).map((c) => `<td>${c}</td>`).join('')}</tr>`);
+      out.push(`<table><thead><tr>${
+        mdCells(rows[0]).map((c) => `<th>${c}</th>`).join('')
+      }</tr></thead><tbody>${body.join('')}</tbody></table>`);
+      continue;
+    }
+
+    const item = line.match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/);
+    if (item) {
+      const depth = Math.floor(item[1].length / 2) + 1;
+      const tag = /\d/.test(item[2]) ? 'ol' : 'ul';
+      while (stack.length > depth) out.push(`</${stack.pop()}>`);
+      while (stack.length < depth) { out.push(`<${tag}>`); stack.push(tag); }
+      out.push(`<li>${mdInline(item[3])}</li>`);
+      continue;
+    }
+
+    // 空行不关列表：列表项之间空一行是常见写法，关掉再开会让 <ol> 从 1 重新数，
+    // "步骤2" 就显示成 "步骤1" 了
+    if (!trimmed) continue;
+    closeLists();
+    out.push(`<p>${mdInline(trimmed)}</p>`);
+  }
+  closeLists();
+  return `<div class="md">${out.join('\n')}</div>`;
+}
+
 // 一级目录只决定 skill 路径的前半截，后半截是脚本按告警名推出来的。选项里那个
 // 固定目录名跟着服务端的 DEFAULT_CATEGORY 走，改了代码这边不用再改一遍。
 function describeCategory() {
@@ -215,7 +321,10 @@ function renderLibrary(data) {
           <td><code>${esc(skill.name)}</code></td>
           <td class="mono-small">${esc(skill.description) || '（没有 description）'}</td>
           <td class="num mono-small">${skill.sections} 小节｜${skill.chars} 字符</td>
-          <td class="num"><button class="edit-landed" data-path="${esc(skill.path)}">编辑</button></td>
+          <td class="num">
+            <button class="preview-landed" data-path="${esc(skill.path)}">预览</button>
+            <button class="edit-landed" data-path="${esc(skill.path)}">编辑</button>
+          </td>
         </tr>`).join('')}</tbody></table>
     </details>`).join('');
   $('library').innerHTML =
@@ -226,6 +335,22 @@ function renderLibrary(data) {
 
 // 已落盘文件的编辑：读回磁盘上的正文 → 改 → 写回。只能改已经存在的文件，
 // 新建仍然走生成那条路，页面不该变成一个能往任意路径写文件的口子。
+async function previewLanded(path) {
+  const dir = $('lib-dir').value;
+  const data = await api(
+    `/api/skill_file?dir=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`);
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.id = 'landed-editor';
+  panel.innerHTML = `<div class="row"><strong>预览</strong><code>${esc(path)}</code>
+      <button class="edit-landed" data-path="${esc(path)}">改这一篇</button>
+      <button class="close-panel">关闭</button></div>
+    <details><summary>查看原文</summary><pre>${esc(data.content)}</pre></details>
+    ${renderMarkdown(data.content)}`;
+  $('landed-editor-slot').replaceChildren(panel);
+  panel.querySelector('.close-panel').onclick = () => panel.remove();
+}
+
 async function editLanded(path) {
   const dir = $('lib-dir').value;
   const data = await api(
@@ -308,8 +433,9 @@ function renderCards(job) {
     }
     if (s.edited) bits.push('<p class="note">这一篇在页面上人工改过。</p>');
     if (s.content) {
-      bits.push(`<details><summary>查看全文（${s.content.length} 字符）</summary><pre>${
-        esc(s.content)}</pre></details>`);
+      bits.push(`<details><summary>预览（渲染后，${s.content.length} 字符）</summary>${
+        renderMarkdown(s.content)}</details>`);
+      bits.push(`<details><summary>查看原文</summary><pre>${esc(s.content)}</pre></details>`);
       bits.push(`<details class="editor"><summary>人工修改</summary>
         <textarea data-index="${s.index}">${esc(s.content)}</textarea>
         <div class="row">
@@ -352,10 +478,15 @@ async function poll() {
 
 $('category').onchange = describeCategory;
 $('lib-refresh').onclick = loadLibrary;
-$('library').onclick = (e) => {
-  const button = e.target.closest('.edit-landed');
-  if (button) editLanded(button.dataset.path);
-};
+// 预览/编辑面板本身也带一个「改这一篇」，所以两个容器都要接这几个按钮
+for (const container of [$('library'), $('landed-editor-slot')]) {
+  container.onclick = (e) => {
+    const edit = e.target.closest('.edit-landed');
+    if (edit) return editLanded(edit.dataset.path);
+    const preview = e.target.closest('.preview-landed');
+    if (preview) return previewLanded(preview.dataset.path);
+  };
+}
 // 改了落盘目录就照着新目录看一遍：撞名与否是相对某个目录说的
 $('output').onchange = () => { $('lib-dir').value = $('output').value; loadLibrary(); };
 
