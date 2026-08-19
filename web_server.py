@@ -42,6 +42,7 @@ from excel_skill_distill_pipeline import (DEFAULT_CATEGORY, DEFAULT_MODEL,
                                           convert_scenario, derive_skill_path,
                                           load_scenarios)
 from model_config import MODEL_PROFILES
+from skill_case_merge_pipeline import build_skill_index
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(BASE_DIR, "web", "index.html")
@@ -132,6 +133,34 @@ def job_view(job: dict) -> dict:
         "scenarios": [scenario_view(job, i) for i in range(len(job["scenarios"]))],
         "has_report": bool(job["report"]),
     }
+
+
+def skill_library(directory: str) -> dict:
+    """落盘目录里已经有哪些 skill，按一级目录归拢。
+
+    落盘之前想知道的是"这一篇是新增还是覆盖"——光看路径记不住目录里已经有什么，
+    所以把现有的列出来，页面上再把撞名的标出来。描述取自 frontmatter，与案例合并
+    流水线挑目标 skill 时读的是同一份索引。
+    """
+    view = {"dir": os.path.abspath(directory), "exists": os.path.isdir(directory),
+            "total": 0, "groups": []}
+    if not view["exists"]:
+        return view
+    groups = {}
+    for item in build_skill_index(directory):
+        parts = item["rel_path"].split("/")
+        level1 = parts[0] if len(parts) > 1 else "（直接放在根目录）"
+        groups.setdefault(level1, []).append({
+            "path": item["rel_path"],
+            "name": parts[-1],
+            "description": item["description"],
+            "sections": len(item["headings"]),
+            "chars": len(item["content"]),
+        })
+    view["groups"] = [{"level1": name, "skills": sorted(items, key=lambda s: s["path"])}
+                      for name, items in sorted(groups.items())]
+    view["total"] = sum(len(g["skills"]) for g in view["groups"])
+    return view
 
 
 def parse_upload(job: dict, category: str) -> None:
@@ -352,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
                                        "default": DEFAULT_MODEL,
                                        "default_category": DEFAULT_CATEGORY,
                                        "default_output": self.server.default_output})
+            if url.path == "/api/skills":
+                return self.send_json(skill_library(
+                    query.get("dir", [""])[0] or self.server.default_output))
             if url.path == "/api/job":
                 return self.send_json(job_view(get_job(query.get("job", [""])[0])))
             if url.path == "/api/skill":

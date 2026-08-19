@@ -58,6 +58,7 @@ pre {
 .tag.ok { color: var(--ok); border-color: currentColor; }
 .tag.failed { color: var(--bad); border-color: currentColor; }
 .tag.pending { color: var(--muted); }
+.tag.warn { color: var(--warn); border-color: currentColor; }
 .audit { background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
 .audit h3 { margin: 0 0 6px; font-size: 14px; color: var(--warn); }
 .audit li { font-size: 13px; }
@@ -67,6 +68,8 @@ pre {
 .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
 .mono-small { font-size: 12px; color: var(--muted); }
+/* skill 文件名不换行：断成两行之后就不像一个文件名了 */
+#library td:first-child { white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -78,14 +81,12 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
     <h2>1. 上传排障步骤表</h2>
     <div class="row">
       <input type="file" id="files" accept=".xlsx,.xlsm" multiple>
-      <label class="field">输出目录归类
-        <select id="category">
-          <option value="排障步骤">固定一级目录：排障步骤</option>
-          <option value="">按工作簿文件名分目录</option>
-        </select>
+      <label class="field">skill 放在哪个一级目录
+        <select id="category"></select>
       </label>
       <button class="primary" id="upload">解析并体检</button>
     </div>
+    <p class="note" id="category-note"></p>
     <p class="note" id="upload-note">可一次选多个工作簿；每个工作簿的所有 sheet 都会遍历。</p>
   </div>
 
@@ -122,6 +123,17 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--accent); }
     </div>
     <p class="note" id="apply-note">落盘只写校验通过的那几篇。改写说明与命令行流水线的格式一致，也可以交给 apply_change_report.py 落盘。</p>
   </div>
+
+  <div class="panel">
+    <h2>现有 skill 库</h2>
+    <div class="row">
+      <label class="field grow">目录
+        <input type="text" id="lib-dir">
+      </label>
+      <button id="lib-refresh">刷新</button>
+    </div>
+    <div id="library"></div>
+  </div>
 </div>
 
 <script>
@@ -148,11 +160,26 @@ function selected() {
     .map((box) => Number(box.value));
 }
 
+// 一级目录只决定 skill 路径的前半截，后半截是脚本按告警名推出来的。选项里那个
+// 固定目录名跟着服务端的 DEFAULT_CATEGORY 走，改了代码这边不用再改一遍。
+function describeCategory() {
+  $('category-note').textContent = $('category').value
+    ? `生成的 skill 路径形如 ${$('category').value}/<告警名>.md`
+    : '生成的 skill 路径形如 <工作簿文件名>/<告警名>.md；一次传多张表时，'
+      + '这样能避开不同表里的同名场景撞到同一个文件上';
+}
+
 async function loadModels() {
   const data = await api('/api/models');
   $('model').innerHTML = data.models
     .map((name) => `<option${name === data.default ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  $('category').innerHTML =
+    `<option value="${esc(data.default_category)}">都放进「${esc(data.default_category)}」</option>`
+    + '<option value="">按工作簿文件名分开放</option>';
+  describeCategory();
   $('output').value = data.default_output;
+  $('lib-dir').value = data.default_output;
+  loadLibrary();
 }
 
 function renderAudit(audit) {
@@ -163,6 +190,43 @@ function renderAudit(audit) {
     `<div class="audit"><h3>步骤表体检：${audit.reduce((n, e) => n + e.issues.length, 0)} 处问题（建议先改表）</h3><ul>${items}</ul></div>`;
 }
 
+let LIBRARY = {paths: new Set()};
+
+function renderLibrary(data) {
+  LIBRARY = {paths: new Set(data.groups.flatMap((g) => g.skills.map((s) => s.path)))};
+  if (!data.exists) {
+    $('library').innerHTML =
+      `<p class="note">目录还不存在：<code>${esc(data.dir)}</code>（第一次落盘时会建）</p>`;
+    return;
+  }
+  const groups = data.groups.map((group) => `
+    <details open>
+      <summary>${esc(group.level1)}（${group.skills.length} 篇）</summary>
+      <table><tbody>${group.skills.map((skill) => `
+        <tr>
+          <td><code>${esc(skill.name)}</code></td>
+          <td class="mono-small">${esc(skill.description) || '（没有 description）'}</td>
+          <td class="num mono-small">${skill.sections} 小节｜${skill.chars} 字符</td>
+        </tr>`).join('')}</tbody></table>
+    </details>`).join('');
+  $('library').innerHTML =
+    `<p class="note"><code>${esc(data.dir)}</code>：${data.total} 篇，`
+    + `${data.groups.length} 个一级目录</p>${groups}`;
+  if (JOB) render(JOB);      // 撞名标记要跟着刷新
+}
+
+async function loadLibrary() {
+  try {
+    renderLibrary(await api(`/api/skills?dir=${encodeURIComponent($('lib-dir').value)}`));
+  } catch (e) {
+    $('library').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+}
+
+// 目标路径在库里已经有了 → 落盘是覆盖而不是新增，这件事要在落盘之前就看得见
+const clash = (path) => LIBRARY.paths.has(path)
+  ? '<span class="tag warn">已存在，落盘会覆盖</span>' : '';
+
 function renderScenarios(job) {
   $('scenarios').innerHTML = job.scenarios.map((s) => `
     <tr>
@@ -170,7 +234,7 @@ function renderScenarios(job) {
       <td>${esc(s.name)}<div class="mono-small">sheet ${esc(s.sheet)}｜第 ${s.rows[0]}-${s.rows[1]} 行</div></td>
       <td class="mono-small">${esc(s.source)}</td>
       <td class="num">${s.steps}</td>
-      <td><code>${esc(s.skill_path)}</code></td>
+      <td><code>${esc(s.skill_path)}</code> ${clash(s.skill_path)}</td>
       <td><span class="tag ${s.state}">${state(s.state)}</span></td>
     </tr>`).join('');
 }
@@ -198,7 +262,7 @@ function renderCards(job) {
     return `<div class="panel" style="margin:12px 0">
       <div class="row"><strong>${esc(s.name)}</strong>
         <span class="tag ${s.state}">${state(s.state)}</span>
-        <code>${esc(s.skill_path)}</code></div>${bits.join('')}
+        <code>${esc(s.skill_path)}</code> ${clash(s.skill_path)}</div>${bits.join('')}
     </div>`;
   }).join('');
 }
@@ -225,6 +289,11 @@ async function poll() {
   render(job);
   if (job.status !== 'running') { clearInterval(POLL); POLL = null; }
 }
+
+$('category').onchange = describeCategory;
+$('lib-refresh').onclick = loadLibrary;
+// 改了落盘目录就照着新目录看一遍：撞名与否是相对某个目录说的
+$('output').onchange = () => { $('lib-dir').value = $('output').value; loadLibrary(); };
 
 $('check-all').onchange = (e) => {
   document.querySelectorAll('#scenarios input.pick').forEach((b) => { b.checked = e.target.checked; });
@@ -273,6 +342,8 @@ $('apply').onclick = async () => {
     const lines = data.applied.map(
       (a) => esc(`${a.path || '第' + a.index + '个场景'}：${a.note}`));
     $('apply-note').innerHTML = `写入 <code>${esc(data.output_dir)}</code><br>` + lines.join('<br>');
+    $('lib-dir').value = $('output').value;
+    loadLibrary();
   } catch (e) {
     $('apply-note').innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }

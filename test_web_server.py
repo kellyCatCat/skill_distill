@@ -181,7 +181,10 @@ def run() -> int:
               status == 200 and "## 新建skill：" in report.decode("utf-8"),
               report[:120].decode("utf-8", "replace"))
 
-        # ---- D. 落盘 ----
+        # ---- D. 落盘（落盘前后各看一次现有 skill 库）----
+        _, before = client.json(f"/api/skills?dir={urllib.parse.quote(output_dir)}")
+        check("落盘前库是空的", before["exists"] is False and before["total"] == 0,
+              str(before))
         status, applied = client.json("/api/apply",
                                       {"job": job["job"], "indexes": [0],
                                        "output_dir": output_dir})
@@ -194,6 +197,16 @@ def run() -> int:
                                               "output_dir": output_dir})
         check("重复落盘不重复写", again["applied"][0]["state"] == "skipped",
               str(again["applied"]))
+
+        _, library = client.json(f"/api/skills?dir={urllib.parse.quote(output_dir)}")
+        listed = [s for g in library["groups"] for s in g["skills"]]
+        check("落盘后能在skill库里看到它",
+              library["total"] == 1 and listed[0]["path"] == first["skill_path"]
+              and listed[0]["description"],
+              str(library))
+        check("库里按一级目录归拢",
+              library["groups"][0]["level1"] == first["skill_path"].split("/")[0],
+              str(library["groups"]))
 
         # ---- E. 违规回复：判失败，且不落盘 ----
         REPLY["text"] = BAD_REPLY
