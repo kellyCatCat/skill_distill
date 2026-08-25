@@ -440,10 +440,17 @@ def main(SOURCE_TREE_DIR, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, GROUPS=None)
     print("=" * 60)
     print("Skill自蒸馏流水线")
     print("=" * 60)
+    # 解析一次只为把真实地址打出来、记进转换报告：API_URL=None 时地址来自 .env，
+    # 光打印入参会显示 None，事后就查不出这批skill是哪个部署生成的。
+    cfg = resolve_model(MODEL_NAME, API_URL)
     print(f"\n源文档树: {SOURCE_TREE_DIR}")
     print(f"输出目录: {OUTPUT_DIR}")
-    print(f"API地址: {API_URL}")
-    print(f"模型: {MODEL_NAME}")
+    print(f"模型: {MODEL_NAME} @ {cfg['api_url']}"
+          f"（thinking {'开' if cfg['thinking'] else '关'}，"
+          f"max_tokens {cfg['max_tokens']}）")
+    if not cfg["registered"]:
+        print(f"[WARN] {MODEL_NAME} 未登记在 model_config.MODEL_PROFILES 里，"
+              f"按不开思考、默认预算处理")
     print(f"并行Worker数: {WORKERS}")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -547,7 +554,7 @@ def main(SOURCE_TREE_DIR, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, GROUPS=None)
             "timestamp": datetime.now().isoformat(),
             "source_dir": SOURCE_TREE_DIR,
             "output_dir": OUTPUT_DIR,
-            "api_url": API_URL,
+            "api_url": cfg["api_url"],
             "model_name": MODEL_NAME,
             "groups_filter": GROUPS,
             "total_source_files": sum(len(r["source_paths"]) for r in all_results),
@@ -571,8 +578,10 @@ if __name__ == "__main__":
     main(
         SOURCE_TREE_DIR="result/v01/tree",
         OUTPUT_DIR=f"skills_distilled/{datetime.now().strftime('%m-%d')}",
-        API_URL="http://76.64.185.52:2207/v1/chat/completions",
-        MODEL_NAME="qwen3.6-27b",
+        # 地址与密钥从 .env 按模型名解析（见 model_config.py）。这里写死地址会
+        # 盖掉那套解析——换了模型名却还指着旧部署，请求就发到了另一个模型上。
+        API_URL=None,
+        MODEL_NAME="qwen3.8-27b",
         WORKERS=3,
         # GROUPS=None 表示处理全部分组；只想跑部分分组时，
         # 传入按'一级目录/二级目录'子串匹配的名称列表，例如：
