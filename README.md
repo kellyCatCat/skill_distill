@@ -37,14 +37,17 @@ cp .env.example .env
 ```
 
 ```ini
-QWEN_BASE_URL=http://<host>:<port>/v1
-QWEN_API_KEY=
+QWEN36_BASE_URL=http://<host>:<port>/v1
+QWEN36_API_KEY=
+
+QWEN38_BASE_URL=http://<host>:<port>/v1
+QWEN38_API_KEY=
 
 MINIMAX_BASE_URL=http://<host>:<port>/v1
 MINIMAX_API_KEY=<your-api-key>
 ```
 
-环境变量优先于 `.env`，可临时覆盖：`QWEN_BASE_URL=... python3 xxx.py`。
+环境变量优先于 `.env`，可临时覆盖：`QWEN36_BASE_URL=... python3 xxx.py`。
 
 ### 2. 自查配置是否解析正确
 

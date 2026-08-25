@@ -31,7 +31,12 @@ ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 # 整个字段都不发，让模型按自己的默认行为思考——不猜各家开思考的字段名。
 MODEL_PROFILES = {
     "qwen3.6-27b": {
-        "env_prefix": "QWEN",
+        "env_prefix": "QWEN36",
+        "thinking": False,
+        "max_tokens": 16384,
+    },
+    "qwen3.8-27b": {
+        "env_prefix": "QWEN38",
         "thinking": False,
         "max_tokens": 16384,
     },
@@ -52,7 +57,7 @@ MODEL_PROFILES = {
 }
 
 # 没登记的模型名按这个兜底，仍可用 api_url 参数直接指定地址
-DEFAULT_PROFILE = {"env_prefix": "QWEN", "thinking": False, "max_tokens": 16384}
+DEFAULT_PROFILE = {"env_prefix": "QWEN36", "thinking": False, "max_tokens": 16384}
 
 
 def load_env_file(path: str = ENV_PATH) -> dict:
@@ -67,7 +72,7 @@ def load_env_file(path: str = ENV_PATH) -> dict:
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip().strip("'\"")
-            # 真实环境变量优先，方便临时覆盖：QWEN_BASE_URL=... python3 xxx.py
+            # 真实环境变量优先，方便临时覆盖：QWEN36_BASE_URL=... python3 xxx.py
             values[key] = os.environ.get(key) or value
     return values
 
