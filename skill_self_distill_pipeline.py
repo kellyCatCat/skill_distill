@@ -13,10 +13,9 @@ from multiprocessing import Pool
 from build_skill_tree import render_tree, write_tree_file
 from model_config import resolve_model
 
-# 模型主机不走代理。各模型的主机由 model_config.resolve_model 按 .env 里的地址
-# 追加进 NO_PROXY，这里只保留最早那台内网机器，避免旧的调用方式失效。
-os.environ['NO_PROXY'] = '76.64.185.52'
-os.environ['no_proxy'] = '76.64.185.52'
+# 模型主机不走代理：resolve_model 会把实际用到的地址（.env 里的，或显式传进来的
+# api_url）追加进 NO_PROXY，见 model_config._allow_direct_connection。这里原先
+# 还写死了最早那台内网机器，且用的是赋值——会把环境里已有的 NO_PROXY 整个盖掉。
 
 # thinking模型有两种放推理过程的方式：独立的 reasoning_content 字段（content干净，
 # 无需处理），或内联在content里的 <think>…</think>。后者必须剥掉——提取器抓的是

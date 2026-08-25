@@ -22,6 +22,7 @@ from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
 
+from model_config import resolve_model
 from skill_self_distill_pipeline import call_model_with_retry, extract_markdown_content
 
 # 案例条目标注了这些字样时不再并入skill（场景已下线/已确认不成立）
@@ -613,9 +614,15 @@ def main(CASES_PATH, SKILL_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH, DRY_R
     print("=" * 60)
     print("新增案例并入skill流水线")
     print("=" * 60)
+    cfg = resolve_model(MODEL_NAME, API_URL)
     print(f"\n案例文件: {CASES_PATH}")
     print(f"skill目录: {SKILL_DIR}")
-    print(f"模型: {MODEL_NAME} @ {API_URL}")
+    print(f"模型: {MODEL_NAME} @ {cfg['api_url']}"
+          f"（thinking {'开' if cfg['thinking'] else '关'}，"
+          f"max_tokens {cfg['max_tokens']}）")
+    if not cfg["registered"]:
+        print(f"[WARN] {MODEL_NAME} 未登记在 model_config.MODEL_PROFILES 里，"
+              f"按不开思考、默认预算处理")
     print(f"并行Worker数: {WORKERS}{'（DRY-RUN）' if DRY_RUN else ''}")
 
     if not os.path.isdir(SKILL_DIR):
@@ -720,8 +727,10 @@ if __name__ == "__main__":
     main(
         CASES_PATH="cases/故障补充场景.json",
         SKILL_DIR="skills_distilled/07-16",
-        API_URL="http://76.64.185.52:2207/v1/chat/completions",
-        MODEL_NAME="qwen3.6-27b",
+        # 地址与密钥从 .env 按模型名解析（见 model_config.py）。这里写死地址会
+        # 盖掉那套解析——换了模型名却还指着旧部署，请求就发到了另一个模型上。
+        API_URL=None,
+        MODEL_NAME="qwen3.8-27b",
         WORKERS=3,
         # 变更说明写在skill目录外，避免被validate_skills.py当成skill校验
         REPORT_PATH=f"reports/skill_change_report_{datetime.now().strftime('%m-%d')}.md",
