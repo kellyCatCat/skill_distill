@@ -15,7 +15,7 @@
 
 用法：
   python3 compare_models.py                                   # 比较默认的两个模型
-  python3 compare_models.py qwen3.6-27b MiniMax-M2.7-thinking  # 指定要比的模型
+  python3 compare_models.py qwen3.6-27b qwen3.8-27b            # 指定要比的模型
 """
 import os
 import re
@@ -26,7 +26,7 @@ from datetime import datetime
 from model_config import MODEL_PROFILES, resolve_model
 from skill_eval_optimize_pipeline import main as optimize_main
 
-DEFAULT_MODELS = ["qwen3.6-27b", "MiniMax-M2.7"]
+DEFAULT_MODELS = ["qwen3.6-27b", "qwen3.8-27b"]
 
 EVALS_PATH = "evals"
 SKILL_DIR = "skills_distilled/07-27"

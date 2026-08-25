@@ -42,9 +42,6 @@ QWEN36_API_KEY=
 
 QWEN38_BASE_URL=http://<host>:<port>/v1
 QWEN38_API_KEY=
-
-MINIMAX_BASE_URL=http://<host>:<port>/v1
-MINIMAX_API_KEY=<your-api-key>
 ```
 
 环境变量优先于 `.env`，可临时覆盖：`QWEN36_BASE_URL=... python3 xxx.py`。
@@ -56,14 +53,14 @@ python3 model_config.py
 ```
 
 ```
-● MiniMax-M2.7
+● qwen3.8-27b
     地址      : http://127.0.0.1:4002/v1/chat/completions
     密钥      : sk-cac-…4pS7（54字符）
-    max_tokens: 32768
-    思考      : 会思考（不发关思考的字段，预算已留给推理）
+    max_tokens: 16384
+    思考      : 关
 ```
 
-密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给会思考的模型，要么把思考压掉、要么根本不起作用，所以这类模型完全不发这个字段。注意"会思考"是按实测登记的——`MiniMax-M2.7` 虽然名字里没有 thinking，实测同样返回 `reasoning_content`，推理照样吃输出预算。
+密钥会打码。**思考开关按模型区分**：给 qwen 关思考的 `enable_thinking: False` 若发给会思考的模型，要么把思考压掉、要么根本不起作用，所以这类模型完全不发这个字段。"会思考"要按**实测**登记而不是看名字——早先接的 `MiniMax-M2.7` 名字里没有 thinking，实测同样返回 `reasoning_content`，推理照样吃输出预算。那个部署现已下线，眼下登记的三个模型都不思考，但这套处理还在（见[thinking 模型的三个坑](#thinking-模型的三个坑)），以后接会思考的模型时在 `MODEL_PROFILES` 里加一条即可。
 
 ### 3. 探测链路是否真的通（建议先跑）
 
@@ -256,24 +253,23 @@ prompt 里内置了定位方法，这是这条流水线的核心：
 同一批评测跑多个模型并排比较，全程 DRY-RUN。
 
 ```bash
-python3 compare_models.py                                                  # 比较默认两个模型
-python3 compare_models.py qwen3.6-27b MiniMax-M2.7 MiniMax-M2.7-thinking   # 指定
+python3 compare_models.py                              # 比较默认两个模型
+python3 compare_models.py qwen3.6-27b qwen3.8-27b       # 指定
 ```
 
 ```
 模型                    skill              判定        篇幅          保留   小节   fixes  秒
 qwen3.6-27b             ...BGP故障案例.md   optimized   9609→10168    106%   5→5    3      119.9
-MiniMax-M2.7            ...BGP故障案例.md   optimized   9609→9956     104%   5→5    4      192.3
-MiniMax-M2.7-thinking   ...BGP故障案例.md   optimized   9609→9883     103%   5→5    2      1411.4
+qwen3.8-27b             ...BGP故障案例.md   optimized   9609→9956     104%   5→5    4      192.3
 ```
 
 各模型的报告分别写到 `reports/skill_optimize_report_<mm-dd>_<模型名>.md`，可以并排读改动内容。
 
 **数字之外必须人工看的**：报告里的 `fixes` 有没有点到评测真正暴露的那处判据——点不到就是没看懂，篇幅和小节数再漂亮也不算过。
 
-**当前的模型分工**：评测优化默认用 `MiniMax-M2.7`；其余流水线调用量大、重跑便宜，用 `qwen3.6-27b`。
+**当前的模型分工**：评测优化默认用 `qwen3.8-27b`（三条里最吃推理）；其余流水线调用量大、重跑便宜，用 `qwen3.6-27b`。
 
-**一次实测结论（BGP AS号不匹配 那条评测）**：一度按"最吃推理就该上 thinking"把默认设成 `MiniMax-M2.7-thinking`，实测下来它最差——慢 11.8 倍，只给 2 条 fix，两条都依赖 BGP 错误码，而该评测现场 TCP 都没建起来、根本不会产生 NOTIFICATION，改完 agent 照样卡住；其中一条还把 Bad Peer AS 的 Error Code 写成 1（应为 2）。`MiniMax-M2.7` 覆盖最全（4 条，含明确删除"eBGP AS号必须不同"这句会放行的判据）且错误码正确。**推理强度不等于这个任务上的产出质量**——所以才需要这个对比入口，而不是照着模型规格挑。
+**一次实测结论（BGP AS号不匹配 那条评测，模型已下线，结论仍成立）**：当时按"最吃推理就该上 thinking"把默认设成 `MiniMax-M2.7-thinking`，实测下来它最差——慢 11.8 倍，只给 2 条 fix，两条都依赖 BGP 错误码，而该评测现场 TCP 都没建起来、根本不会产生 NOTIFICATION，改完 agent 照样卡住；其中一条还把 Bad Peer AS 的 Error Code 写成 1（应为 2）。同部署的非 thinking 变体反而覆盖最全（4 条，含明确删除"eBGP AS号必须不同"这句会放行的判据）且错误码正确。**推理强度不等于这个任务上的产出质量**——所以换模型要过这个对比入口，而不是照着模型规格挑。
 
 ---
 
@@ -384,7 +380,7 @@ rewrite 会丢掉原文里没被重新输出的内容，所以落盘前有几道
 
 ### thinking 模型的三个坑
 
-都已在 `model_config.py` + `call_model_with_retry` 里处理：
+都已在 `model_config.py` + `call_model_with_retry` 里处理。眼下 `MODEL_PROFILES` 里没有 `thinking=True` 的模型（原先的 MiniMax 部署已下线），这套处理留着给以后接入的模型：
 
 1. 写死的 `enable_thinking: False` 会把思考压掉 → 按模型区分，`thinking=True` 的模型整个字段不发（不猜各家开思考的字段名）
 2. 推理 token 也占输出预算 → thinking 档 `max_tokens` 给到 32768，可按流水线用 `MAX_TOKENS` 覆盖；撞上限的报错会点明"thinking开启，推理token也占预算"
