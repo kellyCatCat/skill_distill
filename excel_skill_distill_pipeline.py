@@ -78,6 +78,7 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - **只能使用步骤表里出现过的 CLI，一条都不许自己生成。** 可用的命令来源只有「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列；**「回显」列不算命令来源**——它是某台设备当时的输出，不是配置模板。表里只写了"减少policy数量""BGP视图下配置ipv6-family sr-policy"这种没有具体命令的修复方向时，就照实写这句方向，**不要补全成可执行的配置序列**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。表里那一格是空的，就写"无直接修复CLI"并说明只能定位。
 - **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成参数。回显只用来说明"该看哪个字段"。
 - **参数名沿用步骤表里的写法，不要翻译**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。
+- 表里命令中的 `[ ]`（如 `display cpu-usage process [ slot slot-id ]`）是标“可选参数”的语法记号，不是参数名，**正文里不要保留方括号**：要么整段省掉写成 `display cpu-usage process`，要么展开成 `display cpu-usage process slot <slot-id>` 并把该参数补进入参列表。
 - **正文里出现的每个 `<参数>` 都必须在入参列表里有对应行**。冒出没申报的参数，基本就说明那条CLI是编的——用户无处填，agent 也拿不到。
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
 
@@ -732,7 +733,10 @@ def check_root_causes(content: str, scenario: dict) -> str:
 
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 # 命令里残留的非 <> 占位符：{xxx}、[xxx]、连续大写占位
-BAD_PLACEHOLDER = re.compile(r"\{[^}\n]+\}|\[[a-z][^\]\n]*\]|\bXXX+\b")
+BAD_PLACEHOLDER = re.compile(r"\{[^}\n]+\}|\[\s*[a-z][^\]\n]*\]|\bXXX+\b")
+# 命令的"字面量部分"到第一个占位符为止：<参数>，以及 `[ ]`/`{ }` 这类
+# 表里用来标可选/多选的语法记号——它们在正文里会被省掉或展开，不算字面量。
+COMMAND_LITERAL = re.compile(r"[<\[{]")
 # 表内编号说法，改写后不该留下
 TABLE_REFERENCE = re.compile(r"\d+\s*号命令(行)?|执行\s*\d+\s*号")
 
@@ -797,9 +801,15 @@ def _normalize_command(text: str) -> str:
 
     还要去掉反斜杠：markdown 表格里的管道符必须转义成 `\\|`，不还原的话
     `display paf \\| include XXX` 会和表里的原命令对不上，被误判成编造的命令。
+
+    表里的 `[ ]`/`{ }` 是"可选参数"这类语法记号，只去掉括号本身、留下里面的词：
+    整段丢掉的话，表里的 `display cpu-usage process [ slot slot-id ]` 归一化成
+    `display cpu-usage process`，正文里展开写的 `... slot <slot-id>` 就比不中它，
+    会被误判成编造的命令。
     """
     text = text.replace("\\", "")
-    return re.sub(r"\s+", " ", re.sub(r"<[^>\n]*>", "", text)).strip().lower()
+    text = re.sub(r"[\[\]{}]", " ", re.sub(r"<[^>\n]*>", "", text))
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def step_commands(step: dict) -> list:
@@ -924,10 +934,14 @@ def check_skill_format(content: str, scenario: dict) -> str:
     # 所以只比参数之前的部分。
     # 比的是步骤表里的命令，它本来就是命令，所以这里对行内代码不做任何"像不像
     # 命令"的过滤——过滤只会让某些关键字开头的命令怎么写都通不过。
+    # 字面量到第一个 < [ { 为止：`[ ]` 是"可选参数"的语法记号，表里的
+    # `display cpu-usage process [ slot slot-id ]` 在正文里要么省掉那一段、要么
+    # 展开成 `... slot <slot-id>`，把方括号也算进字面量就只有原样照抄才能通过，
+    # 而照抄的方括号 agent 敲不了——两条要求互相打架，模型三次重试全废。
     spans = INLINE_CODE.findall(content)
     for step in scenario["steps"]:
         for command in step_commands(step):
-            literal = command.split("<")[0].strip()
+            literal = COMMAND_LITERAL.split(command)[0].strip()
             if not literal:
                 continue
             if not any(literal in span for span in spans):
@@ -937,9 +951,15 @@ def check_skill_format(content: str, scenario: dict) -> str:
     # 参数一律 <>，不能留 {} / [] / XXX
     for span in inline_commands(content):
         hit = BAD_PLACEHOLDER.search(span)
-        if hit:
-            return (f"命令 `{span}` 里的参数 {hit.group(0)!r} 不是尖括号形式，"
-                    f"参数一律写成 <小写-连字符>")
+        if not hit:
+            continue
+        if hit.group(0).startswith("["):
+            return (f"命令 `{span}` 里的 {hit.group(0)!r} 是步骤表标"
+                    f"“可选参数”的语法记号，不是能敲进去的东西——"
+                    f"要么整段去掉，要么展开成实际写法（`[ slot slot-id ]` → "
+                    f"`slot <slot-id>`，并把该参数补进入参列表），方括号不要保留")
+        return (f"命令 `{span}` 里的参数 {hit.group(0)!r} 不是尖括号形式，"
+                f"参数一律写成 <小写-连字符>")
 
     # 同一参数名在全篇必须一致：<endpoint-ipv6> 和 <endpointipv6> 不能并存
     params = {p for span in inline_commands(content)

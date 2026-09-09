@@ -139,6 +139,23 @@ def with_ospf(command_text: str) -> str:
         "| policy 名称 |", "| process ID | 是 | OSPF 进程号 |\n| policy 名称 |", 1)
 
 
+# 表里的命令带 `[ slot slot-id ]` 这种"可选参数"记号时，正文要么省掉那一段、
+# 要么展开成 `slot <slot-id>`——两种写法都得放过。曾经字面量算到方括号里头，
+# 只有原样照抄方括号才通得过，而照抄的方括号 agent 敲不了，模型于是无解。
+OPTIONAL_ARG_SCENARIO = copy.deepcopy(scenario)
+OPTIONAL_ARG_SCENARIO["steps"][0]["command"] += "\ndisplay cpu-usage process [ slot slot-id ]"
+
+
+def with_cpu(command_text: str, declare_slot: bool = False) -> str:
+    """把一条带可选参数的命令写进正文，需要时把 slot 参数补进入参列表。"""
+    content = GOOD.replace(
+        "# 根因对照表", f"补充：执行 {command_text} 查看进程占用。\n\n# 根因对照表", 1)
+    if declare_slot:
+        content = content.replace(
+            "| policy 名称 |", "| slot ID | 否 | 单板槽位号，缺省查主控板 |\n| policy 名称 |", 1)
+    return content
+
+
 # 单独直查的用例：这些分支在 check_skill_format 里会被更早的检查抢先命中，
 # 但分支本身的行为仍要验（否则改动它时没人发现）。
 DIRECT_CASES = [
@@ -146,6 +163,16 @@ DIRECT_CASES = [
      (with_ospf("`ospf <process-id>`"), OTHER_KEYWORD_SCENARIO), ""),
     ("非display开头的命令没用反引号仍要拦", check_skill_format,
      (with_ospf("ospf <process-id>"), OTHER_KEYWORD_SCENARIO), "没有以行内代码"),
+    ("可选参数整段省掉要放过", check_skill_format,
+     (with_cpu("`display cpu-usage process`"), OPTIONAL_ARG_SCENARIO), ""),
+    ("可选参数展开成尖括号要放过", check_skill_format,
+     (with_cpu("`display cpu-usage process slot <slot-id>`", declare_slot=True),
+      OPTIONAL_ARG_SCENARIO), ""),
+    ("照抄方括号要被拦下", check_skill_format,
+     (with_cpu("`display cpu-usage process [ slot slot-id ]`"),
+      OPTIONAL_ARG_SCENARIO), "语法记号"),
+    ("带可选参数的命令没用反引号仍要拦", check_skill_format,
+     (with_cpu("display cpu-usage process"), OPTIONAL_ARG_SCENARIO), "没有以行内代码"),
     # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
     ("子关键字不当成写死的值", check_hardcoded_operands,
      ("```\nbgp route-learning acceleration enable\n```",), ""),
