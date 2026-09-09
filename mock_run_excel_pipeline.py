@@ -65,6 +65,30 @@ CPU_GOOD_REPLY = """```json
 ```"""
 
 
+# 改写之前先有一次"读懂表意抽根因"的调用，假回复按 prompt 分派（见 install_mock）
+CAUSES_REPLY = """```json
+{"causes": [{"step": 1, "cause": "SRv6 TE Policy {endpoint/color}不存在", "normal": false},
+            {"step": 1, "cause": "SRv6 TE Policy {endpoint/color}状态正常", "normal": true},
+            {"step": 2, "cause": "SRv6 TE Policy配置不完整", "normal": false},
+            {"step": 3, "cause": "ipv6-family sr-policy地址族未配置", "normal": false},
+            {"step": 4, "cause": "SRv6 TE Policy被shutdown", "normal": false},
+            {"step": 5, "cause": "bfd检测Down", "normal": false},
+            {"step": 6, "cause": "故障感知检测Down", "normal": false},
+            {"step": 7, "cause": "SRv6 TE Policy超限", "normal": false},
+            {"step": 8, "cause": "srlist超限", "normal": false}]}
+```"""
+
+CPU_CAUSES_REPLY = """```json
+{"causes": [{"step": 2, "cause": "路由协议震荡", "normal": false},
+            {"step": 5, "cause": "报文攻击导致CPU冲高", "normal": false},
+            {"step": 11, "cause": "管理面同步数据导致CPU冲高", "normal": false},
+            {"step": 14, "cause": "业务负载高导致CPU冲高", "normal": false}]}
+```"""
+
+# 抽根因那次调用的 prompt 里有这句，用它认出该回哪一份假回复
+CAUSES_MARKER = "判定结论（根因）"
+
+
 class FakeResponse:
     """够 call_model_with_retry 用的最小响应对象。"""
 
@@ -97,21 +121,30 @@ class FakeResponse:
         return self._json
 
 
-def install_mock(reply: str, sse: bool):
+def install_mock(reply: str, sse: bool, causes_reply: str = CAUSES_REPLY):
+    """按 prompt 分派假回复：抽根因那次给根因清单，改写那次给 skill 全文。
+
+    一律回同一份的话，抽根因那次会拿到 skill 正文、重试三次后放弃——流水线仍能
+    跑完（清单为空只是不校验根因覆盖），于是这条链路坏了也没人发现。
+    """
     def fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        prompt = json["messages"][0]["content"] if json else ""
+        if CAUSES_MARKER in prompt:
+            return FakeResponse(causes_reply, sse)
         return FakeResponse(reply, sse)
     distill.requests.post = fake_post
 
 
 def run(label: str, reply: str, sse: bool, workdir: str,
-        model: str = "qwen3.6-27b", xlsx_path: str = XLSX_PATH) -> tuple:
+        model: str = "qwen3.6-27b", xlsx_path: str = XLSX_PATH,
+        causes_reply: str = CAUSES_REPLY) -> tuple:
     """跑一轮，返回 (退出码, 报告路径)。
 
     model 决定 payload 走哪条分支：不开思考的模型会多发一个关思考的
     chat_template_kwargs，开思考的不发。两条都要覆盖，否则换默认模型时
     另一条分支就没人测了。
     """
-    install_mock(reply, sse)
+    install_mock(reply, sse, causes_reply)
     report_path = os.path.join(workdir, "report.md")
     print("\n" + "#" * 72)
     print(f"# {label}（{'SSE流' if sse else '普通JSON'}，{model}）")
@@ -196,6 +229,14 @@ def main(which: str):
             bodies["json"] = skill_body(report)
             if code != 0:
                 failures.append("A 合规回复应当成功，实际退出码非0")
+            # 抽根因那次调用坏掉时清单会是空的，而流水线照样跑完（只是不校验
+            # 对照表漏没漏根因），所以专门盯一眼报告里那一行
+            note = open(report, encoding="utf-8").read()
+            causes_line = next(
+                (ln for ln in note.splitlines() if ln.startswith("- 根因清单：")), "")
+            if "srlist超限" not in causes_line:
+                failures.append(f"A 报告里的根因清单不对，抽根因那次调用可能没走通: "
+                                f"{causes_line!r}")
         if which in ("all", "sse"):
             # SSE 是 MiniMax 那个部署的形态，所以这条特意用它——顺带覆盖
             # thinking=True 时不发 chat_template_kwargs 的那条分支
@@ -227,7 +268,8 @@ def main(which: str):
             # 列不一样的那张表也要能整条跑通：解析靠表头认列、场景名退回 sheet 名、
             # 校验放过裸参数名和 `[ ]` 可选记号
             code, report = run("E. 另一张表（列不一样）", CPU_GOOD_REPLY, False,
-                               os.path.join(workdir, "e"), xlsx_path=CPU_XLSX_PATH)
+                               os.path.join(workdir, "e"), xlsx_path=CPU_XLSX_PATH,
+                               causes_reply=CPU_CAUSES_REPLY)
             if code != 0:
                 failures.append("E 另一张表应当成功，实际退出码非0")
             if "CPU利用率超限" not in skill_body(report):

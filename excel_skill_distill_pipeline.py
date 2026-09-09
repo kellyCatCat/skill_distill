@@ -140,7 +140,7 @@ SCENARIO_SPEC = """
 
 # 本场景的根因清单（必须逐字使用）
 
-输入表格的"步骤详细描述"里已经用 提示/返回"xxx" 的形式写明了每一步的判定结论，本场景的根因就是下面这些：
+下面这份清单是从输入表格的"步骤详细描述"里读出来的判定结论，就是本场景的根因：
 
 <root_causes>
 
@@ -459,32 +459,119 @@ def audit_step_numbers(scenario: dict) -> list:
 # 表里"步骤详细描述"用 提示/返回"xxx" 的形式明确写出了每一步的判定结论，
 # 根因名称就在里面。抽出来当权威清单交给模型，比让它自己起名字可靠得多——
 # 名字一旦被改写，根因对照表就和排查步骤对不上了。
-CONCLUSION_PATTERN = re.compile(
-    r"(?:返回|提示)(?:错误信息)?\s*[“\"]([^”\"]+)[”\"]")
-
-
 def _normalize_cause(text: str) -> str:
     """比对根因名用：去掉 {endpoint/color} 这类占位、空白，并转小写。"""
     return re.sub(r"\s+", "", re.sub(r"[{（(][^}）)]*[}）)]", "", text or "")).lower()
 
 
 def extract_root_causes(scenario: dict) -> list:
-    """从步骤详细描述里抽出每一步的判定结论。
+    """本场景的根因清单：每条 {step, row, text, normal}。
 
-    "……状态正常"这类**无故障分支**同样算一条结论，要一并写进排查步骤和根因对照表：
-    agent 排到那一支时也需要有对照可依，否则会以为漏了判断。只是它的「修复」是
-    "无需修复"。normal 字段用来在 prompt 里标注这一点。
+    清单由 distill_root_causes 事先**读懂表意**抽好、放进 scenario["root_causes"]，
+    这里只取出来——原先是拿正则去捞 提示/返回"xxx" 的字面写法，可各家表述根本不
+    统一（"认为是报文攻击导致CPU冲高""初步定位原因是路由协议震荡"都是结论），
+    正则一条也捞不到，而给正则再加几种写法只是把下一张表的漏判往后推。
+
+    抽取要花一次模型调用，所以只在真正改写时做；`--check`、`--validate`、单测
+    这些不调模型的路径拿到的是空清单，此时不校验"对照表有没有漏根因"
+    （单测直接往 scenario 里塞清单来验这一段）。
     """
-    causes = []
-    seen = set()
+    return scenario.get("root_causes") or []
+
+
+ROOT_CAUSE_PROMPT = """你在读一张网络设备的排障步骤表，请找出这张表**已经写明**的判定结论（根因）。
+
+# 排障步骤
+
+<steps>
+
+# 要求
+
+- 只列表里**明确写出**的结论，不要自己推断、补充表里没有的根因。结论的写法各表不同，
+  下面几种都算，按意思判断，不要只认某一种句式：
+  - 返回/提示"xxx"、报"xxx"
+  - 认为是xxx导致、初步定位原因是xxx、判定为xxx、说明xxx
+- 每条给**根因的名称**（一个短语，不是一整句话），去掉"该步骤执行完后""认为是"这类前缀，
+  也去掉"并继续执行第N步"这类去向。
+- 表里写"……状态正常""无异常"这种**无故障分支**也要列出来，normal 填 true，其余填 false。
+- 同一个根因在多个步骤重复出现时只列一次，step 填第一次出现的步骤号。
+- 表里确实没有写明任何结论时，causes 给空列表。
+
+# 输出格式
+
+只输出一个 json 代码块：
+
+```json
+{"causes": [{"step": 5, "cause": "报文攻击导致CPU冲高", "normal": false},
+            {"step": 8, "cause": "隧道状态正常", "normal": true}]}
+```
+"""
+
+
+def _root_cause_steps(scenario: dict) -> str:
+    """抽根因用的输入：只给编号、步骤描述、详细描述，不给命令和回显。"""
+    blocks = []
     for step in scenario["steps"]:
-        for text in CONCLUSION_PATTERN.findall(step["detail"] or ""):
-            key = _normalize_cause(text)
-            if key and key not in seen:
-                seen.add(key)
-                causes.append({"step": step["no"], "row": step["row"],
-                               "text": text.strip(), "normal": "正常" in text})
+        blocks.append(f"## 步骤{step['no']}：{step['desc']}\n{step['detail']}")
+    return "\n\n".join(blocks)
+
+
+def distill_root_causes(scenario: dict, api_url: str, model_name: str,
+                        timeout: int = 300) -> tuple:
+    """让模型读懂表意，抽出本场景的根因清单。返回 (清单, 错误说明)。
+
+    这份清单有两个用处：写进 prompt 让模型逐字使用（否则同一个根因在排查步骤和
+    根因对照表里会被写成两个名字），以及落盘前校验对照表有没有漏掉某个根因。
+    抽不出来时返回空清单——宁可这一篇不校验根因覆盖，也不要拿编出来的根因去卡它。
+
+    temperature=0：这是归纳判断而不是写作，同一张表每次跑应当抽出同一份清单。
+    """
+    prompt = ROOT_CAUSE_PROMPT.replace("<steps>", _root_cause_steps(scenario))
+    reply = call_model_with_retry(api_url, model_name, prompt,
+                                  extractor=_root_cause_extractor,
+                                  temperature=0, timeout=timeout)
+    if reply.startswith("错误："):
+        return [], reply
+    try:
+        raw = extract_json_block(reply).get("causes") or []
+    except (ValueError, json.JSONDecodeError) as e:
+        return [], f"错误：根因清单解析失败: {e}"
+    return normalize_root_causes(raw, scenario), ""
+
+
+# 根因名的长度上限。超过这个数的多半是把一整句话（"如果X则返回Y并继续执行第3步"）
+# 当成了根因名，它既进不了对照表的一格，也没法和正文逐字对上，宁可丢掉不校验。
+MAX_CAUSE_LENGTH = 40
+
+
+def normalize_root_causes(raw: list, scenario: dict) -> list:
+    """把模型给的根因清单规整成内部形状，并补上每条在步骤表里的行号。"""
+    by_no = {str(step["no"]).strip(): step for step in scenario["steps"]}
+    causes, seen = [], set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("cause") or "").strip()
+        key = _normalize_cause(text)
+        if not key or key in seen or len(text) > MAX_CAUSE_LENGTH:
+            continue
+        seen.add(key)
+        step = by_no.get(str(item.get("step") or "").strip())
+        causes.append({"step": step["no"] if step else item.get("step"),
+                       "row": step["row"] if step else None,
+                       "text": text, "normal": bool(item.get("normal"))})
     return causes
+
+
+def _root_cause_extractor(text: str) -> str:
+    """回复里得有个能解析的 json，且 causes 是个列表，否则重试。"""
+    try:
+        decision = extract_json_block(text)
+    except (ValueError, json.JSONDecodeError) as e:
+        raise ValueError(f"根因清单的json解析失败: {e}")
+    if not isinstance(decision.get("causes"), list):
+        raise ValueError("json 里没有 causes 列表")
+    return text
 
 
 def collect_parameters(scenario: dict) -> list:
@@ -639,9 +726,9 @@ def build_format_spec(scenario: dict) -> str:
                          f"{i}. {c['text']}（来自步骤{c['step']}"
                          f"{'，无故障分支' if c['normal'] else ''}）"
                          for i, c in enumerate(causes, 1))
-                     or "（这张表没有用 提示/返回“xxx” 写明结论。请从"
-                        "“认为是X导致”“初步定位原因是X”这类句子里归纳根因名称，"
-                        "排查步骤和根因对照表两处逐字一致）"))
+                     or "（这张表里没有读到写明的判定结论。请自己从步骤描述里"
+                        "归纳根因名称，同一个根因在排查步骤和根因对照表两处"
+                        "逐字一致）"))
 
 
 # ---------------------------------------------------------------- 输出校验
@@ -1327,6 +1414,13 @@ def repair_prompt(question: str, error: str) -> str:
 
 def convert_scenario(args: tuple) -> dict:
     scenario, skill_path, api_url, model_name, max_tokens, timeout = args
+    # 根因清单先抽：它要写进改写的 prompt（让两处逐字一致），也要用来校验对照表
+    # 有没有漏根因。抽不出来时清单为空，这一篇就不校验根因覆盖，但仍照常改写。
+    causes, cause_error = distill_root_causes(scenario, api_url, model_name, timeout)
+    scenario["root_causes"] = causes
+    print(f"[PID {os.getpid()}] 根因: {scenario['name']} → "
+          + ("、".join(c["text"] for c in causes) if causes else (cause_error or "表里没有写明结论")))
+
     prompt = (PROMPT_TEMPLATE
               .replace("<scenario>", format_scenario(scenario))
               .replace("<format_spec>", build_format_spec(scenario))
@@ -1336,7 +1430,9 @@ def convert_scenario(args: tuple) -> dict:
 
     result = {"scenario": scenario["name"], "skill_path": skill_path,
               "steps": len(scenario["steps"]), "rows": scenario["rows"],
-              "source": scenario.get("source"), "sheet": scenario.get("sheet")}
+              "source": scenario.get("source"), "sheet": scenario.get("sheet"),
+              "root_causes": [c["text"] for c in causes],
+              "root_cause_error": cause_error}
     holder = {}
     reply = call_model_with_retry(api_url, model_name, prompt,
                                   extractor=make_extractor(scenario, holder),
@@ -1362,6 +1458,16 @@ def convert_scenario(args: tuple) -> dict:
     if repaired:
         result["repaired"] = "模型没输出frontmatter的---分隔线，已补回"
     return result
+
+
+def root_cause_note(r: dict) -> str:
+    """报告里写明这一篇是拿哪份根因清单校验的：清单空了就没校验对照表有没有漏，
+    审的人得知道这一点。"""
+    if r.get("root_causes"):
+        return "、".join(r["root_causes"]) + "（对照表按这份清单校验）"
+    if r.get("root_cause_error"):
+        return f"未抽到（{r['root_cause_error']}），本篇未校验对照表是否漏根因"
+    return "表里没有写明判定结论，本篇未校验对照表是否漏根因"
 
 
 def result_source(r: dict) -> str:
@@ -1406,6 +1512,7 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
             continue
         lines += ["", f"## 新建skill：`{r['skill_path']}`", "",
                   f"- 来源场景：{r['scenario']}（{result_source(r)}）",
+                  f"- 根因清单：{root_cause_note(r)}",
                   f"- 分支拆解：{r.get('branches_expanded', '')}"]
         if r.get("repaired"):
             lines.append(f"- 自动修复：{r['repaired']}")
@@ -1579,7 +1686,10 @@ def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
             failures += 1
             print(f"[FAIL] {path}\n       {error}")
         else:
-            print(f"[OK]   {path}（对照场景「{scenario['name']}」）")
+            # 根因清单要一次模型调用才有，这个入口不调模型，所以"对照表漏没漏
+            # 根因"这一项没查——说清楚，别让人以为全查过了
+            print(f"[OK]   {path}（对照场景「{scenario['name']}」；"
+                  f"未查根因覆盖，那要先抽根因清单）")
     print(f"\n共 {len(paths)} 个文件，失败 {failures} 个")
     return 1 if failures else 0
 

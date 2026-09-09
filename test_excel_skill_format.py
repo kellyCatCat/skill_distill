@@ -19,18 +19,42 @@ import sys
 
 from excel_skill_distill_pipeline import (check_hardcoded_operands,
                                           check_skill_format,
-                                          check_unknown_commands, parse_sheet)
+                                          check_unknown_commands,
+                                          normalize_root_causes, parse_sheet)
 
 SAMPLE_PATH = "excel_cases/sample_skill.md"
 
 scenario = parse_sheet("excel_cases/排障步骤表.xlsx")[0]
 GOOD = open(SAMPLE_PATH, encoding="utf-8").read()
 
+# 根因清单平时由 distill_root_causes 读懂表意抽出来（要一次模型调用），这里直接
+# 塞进去：本文件不联网，而且校验器该怎么用这份清单，本来就该拿一份固定的清单来验。
+# 内容照着 excel_cases/排障步骤表.xlsx 的"步骤详细描述"写。
+scenario["root_causes"] = [
+    {"step": "1", "row": 2, "text": "SRv6 TE Policy {endpoint/color}不存在", "normal": False},
+    {"step": "1", "row": 2, "text": "SRv6 TE Policy {endpoint/color}状态正常", "normal": True},
+    {"step": "2", "row": 3, "text": "SRv6 TE Policy配置不完整", "normal": False},
+    {"step": "3", "row": 4, "text": "ipv6-family sr-policy地址族未配置", "normal": False},
+    {"step": "4", "row": 5, "text": "SRv6 TE Policy被shutdown", "normal": False},
+    {"step": "5", "row": 6, "text": "bfd检测Down", "normal": False},
+    {"step": "6", "row": 7, "text": "故障感知检测Down", "normal": False},
+    {"step": "7", "row": 8, "text": "SRv6 TE Policy超限", "normal": False},
+    {"step": "8", "row": 9, "text": "srlist超限", "normal": False},
+]
+
 # 第二张基准表：列不一样（没有排障目标/回显/修复建议/影响性/修复验证），参数在表里
 # 是裸词或 `[ ]` 圈着的，还有一条命令只出现在「步骤详细描述」里。整套解析和校验
 # 都不能假设"表长得跟第一张一样"。
 CPU_SAMPLE_PATH = "excel_cases/sample_skill_cpu.md"
 CPU_SCENARIO = parse_sheet("excel_cases/CPU利用率超限步骤表.xlsx")[0]
+# 这张表的结论写在散文里（"认为是报文攻击导致CPU冲高"），没有统一句式——正则捞不着，
+# 语义抽取能。清单同样是照着表手写的。
+CPU_SCENARIO["root_causes"] = [
+    {"step": 2, "row": 3, "text": "路由协议震荡", "normal": False},
+    {"step": 5, "row": 6, "text": "报文攻击导致CPU冲高", "normal": False},
+    {"step": 11, "row": 12, "text": "管理面同步数据导致CPU冲高", "normal": False},
+    {"step": 14, "row": 15, "text": "业务负载高导致CPU冲高", "normal": False},
+]
 CPU_GOOD = open(CPU_SAMPLE_PATH, encoding="utf-8").read()
 
 
@@ -223,10 +247,28 @@ DIRECT_CASES = [
     ("另一张表编造命令要拦", check_skill_format,
      (CPU_GOOD + "\n- 补充：执行 `display cpu-usage summary` 确认。\n",
       CPU_SCENARIO), "在步骤表中不存在"),
+    # 根因清单是语义抽出来的，抽完照样要校验对照表有没有漏——这张表的结论写在
+    # 散文里（"认为是报文攻击导致CPU冲高"），正则捞不到，从前等于没校验
+    ("另一张表漏了一个根因要拦", check_skill_format,
+     (CPU_GOOD.replace("| 报文攻击导致CPU冲高 |", "| 其它原因 |", 1), CPU_SCENARIO),
+      "根因对照表漏了"),
     ("另一张表照抄方括号要拦", check_skill_format,
      (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
                        "`display cpu-usage service [ slot slot-id ]`", 99),
       CPU_SCENARIO), "语法记号"),
+    # 模型给的根因清单要先规整：一整句话不是根因名，重复的只留一条，
+    # 步骤号要能换算回步骤表的行号（报错时要指出处）
+    ("根因清单：整句话丢掉、重复只留一条、补上行号", normalize_root_causes,
+     ([{"step": 8, "cause": "srlist超限", "normal": False},
+       {"step": 8, "cause": " srlist超限 ", "normal": False},
+       {"step": 3, "cause": "如果ipv6-family sr-policy地址族未配置则返回该结论并继续执行第4步",
+        "normal": False},
+       {"step": 1, "cause": "", "normal": False},
+       "不是字典",
+       {"step": 1, "cause": "SRv6 TE Policy状态正常", "normal": True}], scenario),
+     [{"step": "8", "row": 9, "text": "srlist超限", "normal": False},
+      {"step": "1", "row": 2, "text": "SRv6 TE Policy状态正常", "normal": True}]),
+
     # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
     ("子关键字不当成写死的值", check_hardcoded_operands,
      ("```\nbgp route-learning acceleration enable\n```",), ""),
@@ -239,14 +281,17 @@ def run() -> int:
     failures = 0
     for name, func, args, expect in DIRECT_CASES:
         got = func(*args)
-        ok = (got == "") if expect == "" else (expect in got)
+        if isinstance(expect, list):        # 返回值不是错误说明而是数据
+            ok = got == expect
+        else:
+            ok = (got == "") if expect == "" else (expect in got)
         if not ok:
             failures += 1
         print(f"[{'PASS' if ok else 'FAIL'}] {name}")
-        if got:
+        if got and not isinstance(got, list):
             print(f"        → {got}")
         if not ok:
-            print(f"        期望包含: {expect!r}")
+            print(f"        实际: {got!r}\n        期望: {expect!r}")
     for name, content, expect in CASES:
         got = check_skill_format(content, scenario)
         ok = (got == "") if expect == "" else (expect in got)
