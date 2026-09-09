@@ -156,6 +156,23 @@ def with_cpu(command_text: str, declare_slot: bool = False) -> str:
     return content
 
 
+# 表里直接把参数名写成裸词（`display cpu-usage process process-id`，没有尖括号）
+# 也是常见写法，正文里那一段会写成 `<process-id>`。逐字比就只有原样照抄才能通过，
+# 而照抄的裸参数名 agent 会当成关键字敲进去。
+BARE_PARAM_SCENARIO = copy.deepcopy(scenario)
+BARE_PARAM_SCENARIO["steps"][0]["command"] += "\ndisplay cpu-usage process process-id"
+
+
+def with_process(command_text: str, declare: bool = True) -> str:
+    """把一条带裸参数名的命令写进正文，并把该参数补进入参列表。"""
+    content = GOOD.replace(
+        "# 根因对照表", f"补充：执行 {command_text} 查看进程占用。\n\n# 根因对照表", 1)
+    if declare:
+        content = content.replace(
+            "| policy 名称 |", "| process ID | 是 | 进程号 |\n| policy 名称 |", 1)
+    return content
+
+
 # 单独直查的用例：这些分支在 check_skill_format 里会被更早的检查抢先命中，
 # 但分支本身的行为仍要验（否则改动它时没人发现）。
 DIRECT_CASES = [
@@ -173,6 +190,16 @@ DIRECT_CASES = [
       OPTIONAL_ARG_SCENARIO), "语法记号"),
     ("带可选参数的命令没用反引号仍要拦", check_skill_format,
      (with_cpu("display cpu-usage process"), OPTIONAL_ARG_SCENARIO), "没有以行内代码"),
+    ("裸参数名写成尖括号要放过", check_skill_format,
+     (with_process("`display cpu-usage process <process-id>`"),
+      BARE_PARAM_SCENARIO), ""),
+    # 关键字漏了一个词就是另一条命令，仍要拦；报错里要指出正文里最接近的那段
+    ("裸参数名的命令漏了关键字要拦", check_skill_format,
+     (with_process("`display cpu-usage <process-id>`"),
+      BARE_PARAM_SCENARIO), "最接近的是"),
+    ("裸参数名的命令整条没写要拦", check_skill_format,
+     (with_process("`display cpu-usage`", declare=False),
+      BARE_PARAM_SCENARIO), "没有以行内代码"),
     # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
     ("子关键字不当成写死的值", check_hardcoded_operands,
      ("```\nbgp route-learning acceleration enable\n```",), ""),

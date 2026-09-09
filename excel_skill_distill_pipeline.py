@@ -389,8 +389,8 @@ def extract_root_causes(scenario: dict) -> list:
             key = _normalize_cause(text)
             if key and key not in seen:
                 seen.add(key)
-                causes.append({"step": step["no"], "text": text.strip(),
-                               "normal": "正常" in text})
+                causes.append({"step": step["no"], "row": step["row"],
+                               "text": text.strip(), "normal": "正常" in text})
     return causes
 
 
@@ -709,14 +709,19 @@ def check_root_causes(content: str, scenario: dict) -> str:
     body = sections.get("前置检查", "") + "\n" + sections.get("排查步骤", "")
     body_key = _normalize_cause(body)
 
+    def with_source(cause):
+        """根因后面缀上它在步骤表里的出处，省得人拿着根因名满表找。"""
+        where = sheet_location(scenario, cause.get("step"), cause.get("row"))
+        return f"{cause['text']}（{where}）" if where else cause["text"]
+
     faults = [c for c in extract_root_causes(scenario) if not c["normal"]]
-    absent_from_table = [c["text"] for c in faults
+    absent_from_table = [with_source(c) for c in faults
                          if _normalize_cause(c["text"]) not in in_table]
     if absent_from_table:
         return (f"根因对照表漏了步骤表里写明的根因: {'、'.join(absent_from_table)}"
                 f"——对照表必须覆盖每一个根因")
 
-    absent_from_body = [c["text"] for c in faults
+    absent_from_body = [with_source(c) for c in faults
                         if _normalize_cause(c["text"]) not in body_key]
     if absent_from_body:
         return (f"这些根因只在对照表里有、正文里没有判到: {'、'.join(absent_from_body)}"
@@ -734,9 +739,11 @@ def check_root_causes(content: str, scenario: dict) -> str:
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 # 命令里残留的非 <> 占位符：{xxx}、[xxx]、连续大写占位
 BAD_PLACEHOLDER = re.compile(r"\{[^}\n]+\}|\[\s*[a-z][^\]\n]*\]|\bXXX+\b")
-# 命令的"字面量部分"到第一个占位符为止：<参数>，以及 `[ ]`/`{ }` 这类
-# 表里用来标可选/多选的语法记号——它们在正文里会被省掉或展开，不算字面量。
-COMMAND_LITERAL = re.compile(r"[<\[{]")
+# `[ ]`/`{ }` 圈起来的是表里标"可选/多选"的语法记号，正文里会被整段省掉或展开成
+# 实际写法，不算必须写出来的部分——比对命令时从第一个 [ { 起截掉。
+OPTIONAL_SYNTAX = re.compile(r"[\[{]")
+# 单个 <参数>
+COMMAND_PARAM = re.compile(r"^<[^>]*>$")
 # 表内编号说法，改写后不该留下
 TABLE_REFERENCE = re.compile(r"\d+\s*号命令(行)?|执行\s*\d+\s*号")
 
@@ -821,6 +828,70 @@ def step_commands(step: dict) -> list:
     """
     return [line.strip() for line in (step.get("command") or "").splitlines()
             if line.strip()]
+
+
+def command_tokens(text: str) -> list:
+    """把命令切成词，`<参数>` 整个算一个词。
+
+    转义的反斜杠先去掉：markdown 表格里的 `|` 必须写成 `\\|`。
+    """
+    return re.findall(r"<[^>\n]*>|\S+", (text or "").replace("\\", "").lower())
+
+
+def command_covers(required: list, span: list) -> bool:
+    """正文里的一段行内代码（span）有没有把表里这条命令（required）完整写出来。
+
+    比的是**关键字要齐、顺序要对**，参数位置上填的是什么不管：参数名在改写时本来
+    就会变（`<endpointipv6>` → `<endpoint-ipv6>`），而表里**不带尖括号直接写参数名**
+    的命令也不少（`display cpu-usage process process-id`），正文里那一段会写成
+    `<process-id>`——逐字比就只有原样照抄才能通过，而照抄的裸参数名 agent 会当成
+    关键字敲进去。所以 `<参数>` 两边都当通配。
+
+    span 末尾多出来的词不管：正文常在命令后面接 `| include xxx`；反过来 span 比
+    表里的命令短就是漏了词，不算写出来了——正文里单独出现的 `<segment-list-id>`
+    （"该参数从步骤1的回显取"这类句子里常有）因此不会把整条命令顶掉。
+
+    一个 `<参数>` 只顶一个词。顶多个词的话，`display cpu-usage <process-id>`
+    就能把 `display cpu-usage process process-id` 顶掉——关键字 process 被吞了，
+    写出来是另一条命令，而这正是本检查要拦的。
+    """
+    if len(span) < len(required):
+        return False
+    # 头一个词是命令关键字（display / ospf / …），它不许被通配顶掉：表里
+    # `commit` 这种单词命令，随便哪个正文里的 `<参数>` 都够长，不锚住就白查了。
+    if not COMMAND_PARAM.match(required[0]) and span[0] != required[0]:
+        return False
+    for want, got in zip(required, span):
+        if COMMAND_PARAM.match(want) or COMMAND_PARAM.match(got):
+            continue
+        if want != got:
+            return False
+    return True
+
+
+def sheet_location(scenario: dict, step_no=None, row=None) -> str:
+    """报错里带上的步骤表位置，人能直接翻到那一行去核对哪里写的和正文对不上。"""
+    parts = []
+    if step_no:
+        parts.append(f"步骤{step_no}")
+    if scenario.get("sheet"):
+        parts.append(f"sheet「{scenario['sheet']}」")
+    if row:
+        parts.append(f"第{row}行")
+    return "，".join(parts)
+
+
+def closest_span(required: list, spans: list) -> str:
+    """和这条命令共同前缀最长的那段行内代码，用来在报错里指出差在哪儿。"""
+    best, best_len = "", 1   # 至少两个词相同才算"接近"，否则指出来反而误导
+    for raw in spans:
+        tokens = command_tokens(raw)
+        n = 0
+        while n < min(len(tokens), len(required)) and tokens[n] == required[n]:
+            n += 1
+        if n > best_len:
+            best, best_len = raw.strip(), n
+    return best
 
 
 def known_commands(scenario: dict) -> set:
@@ -927,26 +998,31 @@ def check_skill_format(content: str, scenario: dict) -> str:
         return (f"正文残留了表内编号说法'{hit.group(0)}'，"
                 f"agent看不到这张表，必须换成真正的命令")
 
-    # 命令必须在反引号里。比对用"第一个参数之前的字面量部分"而不是前两个词：
-    # 表里 display current-configuration configuration segment-routing-ipv6 与
+    # 命令必须在反引号里。逐词比而不是只比前两个词：表里
+    # display current-configuration configuration segment-routing-ipv6 与
     # ...configuration bgp 前两个词相同，display paf | include SPEC_RES_A 与
-    # SPEC_RES_B 也是，只比前两个词的话模型漏写一条照样能通过。参数名会被改写，
-    # 所以只比参数之前的部分。
+    # SPEC_RES_B 也是，只比前两个词的话模型漏写一条照样能通过。参数位置不比
+    # （见 command_covers），`[ ]` 圈起来的可选段整段不要求写出来。
     # 比的是步骤表里的命令，它本来就是命令，所以这里对行内代码不做任何"像不像
     # 命令"的过滤——过滤只会让某些关键字开头的命令怎么写都通不过。
-    # 字面量到第一个 < [ { 为止：`[ ]` 是"可选参数"的语法记号，表里的
-    # `display cpu-usage process [ slot slot-id ]` 在正文里要么省掉那一段、要么
-    # 展开成 `... slot <slot-id>`，把方括号也算进字面量就只有原样照抄才能通过，
-    # 而照抄的方括号 agent 敲不了——两条要求互相打架，模型三次重试全废。
     spans = INLINE_CODE.findall(content)
+    span_tokens = [command_tokens(span) for span in spans]
     for step in scenario["steps"]:
         for command in step_commands(step):
-            literal = COMMAND_LITERAL.split(command)[0].strip()
-            if not literal:
+            required = command_tokens(OPTIONAL_SYNTAX.split(command)[0])
+            if not required:
                 continue
-            if not any(literal in span for span in spans):
-                return (f"命令 {command!r} 没有以行内代码（反引号包裹）的形式"
-                        f"出现在正文里")
+            if any(command_covers(required, tokens) for tokens in span_tokens):
+                continue
+            near = closest_span(required, spans)
+            hint = (f"；正文里最接近的是 `{near}`——关键字必须齐，"
+                    f"参数位置写成 `<参数>` 即可" if near else "")
+            where = sheet_location(scenario, step.get("no"), step.get("row"))
+            return (f"命令 {command!r}（步骤表 {where}）没有以行内代码"
+                    f"（反引号包裹）的形式出现在正文里{hint}"
+                    if where else
+                    f"命令 {command!r} 没有以行内代码（反引号包裹）的形式"
+                    f"出现在正文里{hint}")
 
     # 参数一律 <>，不能留 {} / [] / XXX
     for span in inline_commands(content):
@@ -1111,7 +1187,8 @@ def convert_scenario(args: tuple) -> dict:
           f"（{len(scenario['steps'])} 步）→ {skill_path}")
 
     result = {"scenario": scenario["name"], "skill_path": skill_path,
-              "steps": len(scenario["steps"]), "rows": scenario["rows"]}
+              "steps": len(scenario["steps"]), "rows": scenario["rows"],
+              "source": scenario.get("source"), "sheet": scenario.get("sheet")}
     holder = {}
     reply = call_model_with_retry(api_url, model_name, prompt,
                                   extractor=make_extractor(scenario, holder),
@@ -1137,6 +1214,17 @@ def convert_scenario(args: tuple) -> dict:
     if repaired:
         result["repaired"] = "模型没输出frontmatter的---分隔线，已补回"
     return result
+
+
+def result_source(r: dict) -> str:
+    """一条结果对应步骤表里的哪一段，报告里两处都要写——报错说"命令没出现在正文里"
+    时，人得能立刻翻到源表的那几行去核对。"""
+    where = f"第{r['rows'][0]}-{r['rows'][1]}行" if r.get("rows") else ""
+    if r.get("sheet"):
+        where = f"sheet「{r['sheet']}」{where}"
+    if r.get("source"):
+        where = f"`{r['source']}` {where}"
+    return where
 
 
 def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
@@ -1169,7 +1257,7 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
         if r.get("error") or r.get("invalid") or not r.get("content"):
             continue
         lines += ["", f"## 新建skill：`{r['skill_path']}`", "",
-                  f"- 来源场景：{r['scenario']}（步骤表第{r['rows'][0]}-{r['rows'][1]}行）",
+                  f"- 来源场景：{r['scenario']}（{result_source(r)}）",
                   f"- 分支拆解：{r.get('branches_expanded', '')}"]
         if r.get("repaired"):
             lines.append(f"- 自动修复：{r['repaired']}")
@@ -1186,6 +1274,7 @@ def build_report(results: list, audit: list, xlsx_path: str, output_dir: str,
         lines += ["", "## 处理失败（未落盘，需重跑）", ""]
         for r in failed:
             lines += [f"### `{r['skill_path']}`", "",
+                      f"- 来源场景：{r['scenario']}（{result_source(r)}）",
                       f"- 失败原因：{r.get('error') or r['invalid']}"]
             if r.get("content"):
                 # 全文照登、不截断：这份内容多半只差一两处，是拿来人工改的，
