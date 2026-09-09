@@ -27,6 +27,7 @@
   python3 excel_skill_distill_pipeline.py --model qwen3.6-27b  # 临时换模型（默认见 DEFAULT_MODEL）
   python3 excel_skill_distill_pipeline.py --validate <skill.md> # 单独校验已有的skill文件
 """
+import difflib
 import json
 import os
 import re
@@ -98,7 +99,7 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
 - **只能使用步骤表里出现过的 CLI，一条都不许自己生成。** 可用的命令来源只有「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列；**「回显」列不算命令来源**——它是某台设备当时的输出，不是配置模板。表里只写了"减少policy数量""BGP视图下配置ipv6-family sr-policy"这种没有具体命令的修复方向时，就照实写这句方向，**不要补全成可执行的配置序列**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。表里那一格是空的，就写"无直接修复CLI"并说明只能定位。
 - **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成参数。回显只用来说明"该看哪个字段"。
-- **参数名沿用步骤表里的写法，不要翻译**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。
+- **参数名沿用步骤表里的写法，不要翻译、不要另起**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。表里的参数**未必带尖括号**：`display cpu-usage process process-id` 里的 `process-id`、`[ { car-index <car-index> } ]` 里的 `car-index` 都是参数，正文里补上尖括号写成 `<process-id>`、`<car-index>` 即可，名字照抄（写成 `<car-id>` 就和表里对不上了），并把它们补进入参列表。
 - 表里命令中的 `[ ]`（如 `display cpu-usage process [ slot slot-id ]`）是标“可选参数”的语法记号，不是参数名，**正文里不要保留方括号**：要么整段省掉写成 `display cpu-usage process`，要么展开成 `display cpu-usage process slot <slot-id>` 并把该参数补进入参列表。
 - **正文里出现的每个 `<参数>` 都必须在入参列表里有对应行**。冒出没申报的参数，基本就说明那条CLI是编的——用户无处填，agent 也拿不到。
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
@@ -574,16 +575,37 @@ def _root_cause_extractor(text: str) -> str:
     return text
 
 
+# 回显里的设备提示符 `<HUAWEI>` 长得和参数一样。参数按写作约束是小写连字符
+# （或中文），所以整串大写的一律不当参数——否则"入参列表必须覆盖它们"会让模型
+# 给 <HUAWEI> 也补一行。
+DEVICE_PROMPT = re.compile(r"^[A-Z0-9_\-]+$")
+
+
 def collect_parameters(scenario: dict) -> list:
-    """表里命令用到的全部 <参数>，按出现顺序去重。"""
+    """表里命令用到的全部 <参数>，按出现顺序去重。
+
+    四列都扫（见 COMMAND_SOURCE_FIELDS），**「步骤详细描述」也算**：表里带参数的
+    命令常常只写在描述里（`display attack-source-trace slot slot-id verbose
+    [ { car-index <car-index> } ... ]`），漏掉这一列，模型就不知道那个参数在表里
+    叫什么，只能自己起名字——实测起成了 `<car-id>`，然后被"这条CLI是自己编的"拦下。
+    """
     params, seen = [], set()
     for step in scenario["steps"]:
-        for field in ("command", "fix", "verify"):
+        for field in COMMAND_SOURCE_FIELDS:
             for param in re.findall(r"<([^>\n]+)>", step.get(field) or ""):
-                if param not in seen:
+                if param not in seen and not DEVICE_PROMPT.match(param.strip()):
                     seen.add(param)
                     params.append(param)
     return params
+
+
+def closest_sheet_param(param: str, scenario_params: list) -> str:
+    """表里最像这个名字的参数。模型改了参数名（`car-index` → `car-id`）时，
+    要指出表里原来叫什么，而不是让它把整条命令删掉。"""
+    keys = {re.sub(r"[\s\-_]", "", p).lower(): p for p in scenario_params}
+    match = difflib.get_close_matches(
+        re.sub(r"[\s\-_]", "", param).lower(), list(keys), n=1, cutoff=0.6)
+    return keys[match[0]] if match else ""
 
 
 def _safe_name(text: str) -> str:
@@ -718,10 +740,8 @@ def build_format_spec(scenario: dict) -> str:
     return (load_skill_template() + "\n\n" + SCENARIO_SPEC
             .replace("<derived_params>",
                      "、".join(f"`<{p}>`" for p in params)
-                     or "（表里的命令没有用尖括号写参数。命令里那些随设备而变的"
-                        "占位词——如 `display cpu-usage process process-id` 里的 "
-                        "`process-id`、`[ slot slot-id ]` 里的 `slot-id`——仍然是参数，"
-                        "正文里写成 `<process-id>`、`<slot-id>` 并补进入参列表）")
+                     or "（表里的命令没有用尖括号写参数，但命令里那些随设备而变的"
+                        "占位词仍然是参数，见下面写作约束里「参数名沿用表里的写法」那条）")
             .replace("<root_causes>",
                      "\n".join(
                          f"{i}. {c['text']}（来自步骤{c['step']}"
@@ -868,8 +888,16 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
                 continue
             # 表里本来就有这个参数 → 该补进入参列表；表里没有 → 这条CLI是编的。
             # 两种情况改法相反，不说清楚模型会往错的方向修。
-            if (_param_declared(param, from_sheet)
-                    or re.sub(r"[\s\-_]", "", param).lower() in sheet_text):
+            key = re.sub(r"[\s\-_]", "", param).lower()
+            # 名字被改过（表里写 car-index，正文写成 car-id）时，该做的是改回表里的
+            # 写法，不是补一行、更不是删命令——三种改法互相矛盾，指错了模型要么留下
+            # 一个表里没有的参数名，要么把本来对的命令删掉
+            near = closest_sheet_param(param, scenario_params)
+            if near and re.sub(r"[\s\-_]", "", near).lower() != key:
+                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行；"
+                        f"步骤表里这个参数写作 `<{near}>`——**参数名要沿用表里的写法**，"
+                        f"改成 `<{near}>` 再补进入参列表。当前入参列表只有：{listed}")
+            if _param_declared(param, from_sheet) or key in sheet_text:
                 return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行。"
                         f"这个参数在步骤表的命令里就有，**把它补进入参列表**——"
                         f"能由用户/告警提供的填「是」，只能从前面步骤的回显里取的填「否」"
@@ -1222,8 +1250,36 @@ def check_unknown_commands(content: str, scenario: dict) -> str:
                              for k in known):
             continue
         return (f"正文里的 `{raw}` 在步骤表中不存在——表没给的命令不要自己编，"
-                f"没有可用命令时写到根因判定为止")
+                f"没有可用命令时写到根因判定为止。{available_note(scenario)}")
     return ""
+
+
+# 报错里列命令的条数上限：多到一定程度就不是提示而是噪音了
+MAX_LISTED_COMMANDS = 20
+
+
+def available_commands(scenario: dict) -> list:
+    """表里给了的命令，按出现顺序去重——报错时列出来，省得模型再编一条。"""
+    commands, seen = [], set()
+    for step in scenario["steps"]:
+        for command in step_commands(step):
+            if command not in seen:
+                seen.add(command)
+                commands.append(command)
+    for command in sorted(known_commands(scenario)):
+        if command not in seen:
+            seen.add(command)
+            commands.append(command)
+    return commands
+
+
+def available_note(scenario: dict) -> str:
+    commands = available_commands(scenario)
+    if not commands:
+        return "本表没有给出任何命令。"
+    listed = "、".join(f"`{c}`" for c in commands[:MAX_LISTED_COMMANDS])
+    more = "等" if len(commands) > MAX_LISTED_COMMANDS else ""
+    return f"本表可用的命令只有：{listed}{more}"
 
 
 def check_skill_format(content: str, scenario: dict) -> str:

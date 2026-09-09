@@ -20,6 +20,7 @@ import sys
 from excel_skill_distill_pipeline import (check_hardcoded_operands,
                                           check_skill_format,
                                           check_unknown_commands,
+                                          collect_parameters,
                                           normalize_root_causes, parse_sheet,
                                           step_commands)
 
@@ -253,6 +254,20 @@ DIRECT_CASES = [
     ("另一张表漏了一个根因要拦", check_skill_format,
      (CPU_GOOD.replace("| 报文攻击导致CPU冲高 |", "| 其它原因 |", 1), CPU_SCENARIO),
       "根因对照表漏了"),
+    # 表里 `car-index` 只写在「步骤详细描述」里。模型改了名字（写成 `<car-id>`）时，
+    # 该说的是"改回表里的写法"——说"这条CLI是自己编的、删掉它"会让它把对的命令删了
+    ("参数名被改过要指出表里的写法", check_skill_format,
+     (CPU_GOOD.replace("`display attack-source-trace slot <slot-id> verbose`",
+                       "`display attack-source-trace slot <slot-id> verbose "
+                       "car-index <car-id>`", 1),
+      CPU_SCENARIO), "步骤表里这个参数写作 `<car-index>`"),
+    # 报错里要列出表里可用的命令，否则模型改一版又编一条别的
+    ("编造命令的报错要列出可用命令", check_unknown_commands,
+     ("正文：`display logbuffer`", CPU_SCENARIO), "本表可用的命令只有"),
+    # 回显里的设备提示符 `<HUAWEI>` 长得像参数，但它不是——写进"入参列表必须覆盖
+    # 它们"会让模型给它补一行
+    ("设备提示符不当成参数", collect_parameters, (CPU_SCENARIO,),
+     ["car-index", "begin-time", "end-time"]),
     ("另一张表照抄方括号要拦", check_skill_format,
      (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
                        "`display cpu-usage service [ slot slot-id ]`", 99),
