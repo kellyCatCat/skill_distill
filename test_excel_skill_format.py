@@ -18,12 +18,20 @@ import re
 import sys
 
 from excel_skill_distill_pipeline import (check_hardcoded_operands,
-                                          check_skill_format, parse_sheet)
+                                          check_skill_format,
+                                          check_unknown_commands, parse_sheet)
 
 SAMPLE_PATH = "excel_cases/sample_skill.md"
 
 scenario = parse_sheet("excel_cases/排障步骤表.xlsx")[0]
 GOOD = open(SAMPLE_PATH, encoding="utf-8").read()
+
+# 第二张基准表：列不一样（没有排障目标/回显/修复建议/影响性/修复验证），参数在表里
+# 是裸词或 `[ ]` 圈着的，还有一条命令只出现在「步骤详细描述」里。整套解析和校验
+# 都不能假设"表长得跟第一张一样"。
+CPU_SAMPLE_PATH = "excel_cases/sample_skill_cpu.md"
+CPU_SCENARIO = parse_sheet("excel_cases/CPU利用率超限步骤表.xlsx")[0]
+CPU_GOOD = open(CPU_SAMPLE_PATH, encoding="utf-8").read()
 
 
 def variant(old, new, count=1):
@@ -200,6 +208,25 @@ DIRECT_CASES = [
     ("裸参数名的命令整条没写要拦", check_skill_format,
      (with_process("`display cpu-usage`", declare=False),
       BARE_PARAM_SCENARIO), "没有以行内代码"),
+
+    # ---- 第二张基准表（列不一样，见文件开头） ----
+    ("另一张表的合规样例", check_skill_format, (CPU_GOOD, CPU_SCENARIO), ""),
+    # `display users` 只在「步骤详细描述」里出现（那一步的「命令行」格写的是 NA），
+    # 它也是表给的命令，不该被当成模型自己编的
+    ("只写在详细描述里的命令要放过", check_unknown_commands,
+     ("正文：`display users`", CPU_SCENARIO), ""),
+    ("详细描述里也没有的命令仍要拦", check_unknown_commands,
+     ("正文：`display sessions all`", CPU_SCENARIO), "在步骤表中不存在"),
+    ("另一张表漏写一条命令要拦", check_skill_format,
+     (CPU_GOOD.replace("`display snmp-agent statistics mib timeout`", "该命令", 99),
+      CPU_SCENARIO), "没有以行内代码"),
+    ("另一张表编造命令要拦", check_skill_format,
+     (CPU_GOOD + "\n- 补充：执行 `display cpu-usage summary` 确认。\n",
+      CPU_SCENARIO), "在步骤表中不存在"),
+    ("另一张表照抄方括号要拦", check_skill_format,
+     (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
+                       "`display cpu-usage service [ slot slot-id ]`", 99),
+      CPU_SCENARIO), "语法记号"),
     # `bgp route-learning` 跟的是子关键字而不是实例名，不该被当成"写死了具体值"
     ("子关键字不当成写死的值", check_hardcoded_operands,
      ("```\nbgp route-learning acceleration enable\n```",), ""),

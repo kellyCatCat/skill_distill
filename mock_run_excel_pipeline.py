@@ -29,12 +29,15 @@ import tempfile
 
 import skill_self_distill_pipeline as distill
 import excel_skill_distill_pipeline as pipeline
-from test_excel_skill_format import GOOD
+from test_excel_skill_format import CPU_GOOD, GOOD
 
 # 不会真的被访问到：requests.post 已被替换，这里只是让 resolve_model 不去读 .env
 MOCK_URL = "http://mock.invalid/v1/chat/completions"
 
 XLSX_PATH = "excel_cases/排障步骤表.xlsx"
+# 第二张表：列不一样（没有排障目标/回显/修复建议/影响性/修复验证），
+# 参数在表里是裸词或 `[ ]` 圈着的。整条流水线不能假设表长得跟第一张一样。
+CPU_XLSX_PATH = "excel_cases/CPU利用率超限步骤表.xlsx"
 
 GOOD_REPLY = """```json
 {"scenario": "SRv6 TE Policy down告警", "steps": 8,
@@ -49,6 +52,17 @@ GOOD_REPLY = """```json
 BAD_REPLY = GOOD_REPLY.replace(
     "`display srv6-te policy endpoint <endpoint-ipv6> color <color-id>`",
     "display srv6-te policy endpoint {endpointipv6} color {colorid}")
+
+
+CPU_GOOD_REPLY = """```json
+{"scenario": "CPU利用率超限", "steps": 14,
+ "branches_expanded": "步骤1的三分支长句、步骤12的服务类型判据已拆成逐条",
+ "commands_normalized": [{"from": "process-id", "to": "<process-id>"},
+                         {"from": "[ slot slot-id ]", "to": "slot <slot-id>"}]}
+```
+```markdown
+""" + CPU_GOOD + """
+```"""
 
 
 class FakeResponse:
@@ -90,7 +104,7 @@ def install_mock(reply: str, sse: bool):
 
 
 def run(label: str, reply: str, sse: bool, workdir: str,
-        model: str = "qwen3.6-27b") -> tuple:
+        model: str = "qwen3.6-27b", xlsx_path: str = XLSX_PATH) -> tuple:
     """跑一轮，返回 (退出码, 报告路径)。
 
     model 决定 payload 走哪条分支：不开思考的模型会多发一个关思考的
@@ -105,7 +119,7 @@ def run(label: str, reply: str, sse: bool, workdir: str,
     code = 0
     try:
         pipeline.main(
-            XLSX_PATH=XLSX_PATH,
+            XLSX_PATH=xlsx_path,
             OUTPUT_DIR=os.path.join(workdir, "skills"),
             API_URL=MOCK_URL,
             MODEL_NAME=model,
@@ -209,6 +223,16 @@ def main(which: str):
         if which in ("all", "repair"):
             failures += check_repair_loop()
 
+        if which in ("all", "other-sheet"):
+            # 列不一样的那张表也要能整条跑通：解析靠表头认列、场景名退回 sheet 名、
+            # 校验放过裸参数名和 `[ ]` 可选记号
+            code, report = run("E. 另一张表（列不一样）", CPU_GOOD_REPLY, False,
+                               os.path.join(workdir, "e"), xlsx_path=CPU_XLSX_PATH)
+            if code != 0:
+                failures.append("E 另一张表应当成功，实际退出码非0")
+            if "CPU利用率超限" not in skill_body(report):
+                failures.append("E 报告里没有另一张表的skill正文")
+
         if "json" in bodies and "sse" in bodies:
             if bodies["json"] != bodies["sse"]:
                 failures.append("SSE拼回的正文与普通JSON路径不一致")
@@ -220,8 +244,9 @@ def main(which: str):
             for item in failures:
                 print(f"[FAIL] {item}")
         else:
-            print("[OK] 四种情形均符合预期：合规回复能产出skill，SSE与JSON逐字一致，"
-                  "违规回复被拦下且未落盘，校验失败会带着原因重问并在第二次通过")
+            print("[OK] 五种情形均符合预期：合规回复能产出skill，SSE与JSON逐字一致，"
+                  "违规回复被拦下且未落盘，校验失败会带着原因重问并在第二次通过，"
+                  "列不一样的另一张表同样跑得通")
         return 1 if failures else 0
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

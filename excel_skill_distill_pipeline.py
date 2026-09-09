@@ -40,18 +40,39 @@ from skill_case_merge_pipeline import BANNED_CONTENT_PATTERNS, extract_json_bloc
 # 表头所在行，其余行为数据行
 HEADER_ROW = 1
 
-# 列序（1基），跟着表头走。改表结构时只动这里。
-COL_GOAL = 1        # 排障目标：告警名 + 故障构造方法
-COL_TOPOLOGY = 2    # 组网场景
-COL_STEP_NO = 3     # 排障步骤编号
-COL_STEP_DESC = 4   # 排障步骤描述
-COL_STEP_DETAIL = 5  # 步骤详细描述（含分支逻辑，改写的主要对象）
-COL_RAG_INDEX = 6   # 命令行编号及用途（ragIndex）
-COL_COMMAND = 7     # 命令行
-COL_ECHO = 8        # 回显
-COL_FIX = 9         # 配置修复建议
-COL_IMPACT = 10     # 修复建议影响性
-COL_VERIFY = 11     # 修复验证
+# 列名关键字 → 内部字段。**按表头认列，不按列序**：各家的表列数不一样，有的
+# 没有「排障目标」，有的连「回显」「配置修复建议」「修复验证」都没有，写死列序
+# 会整表错位（把「步骤详细描述」当成「命令行」读，后面每一道校验都跟着错）。
+# 每列取**匹配到的最长关键字**所属字段，短关键字因此抢不走别人的列：
+# 「命令行」是「本步骤需要使用的命令行的编号及使用目的（ragIndex）」的子串，
+# 「修复建议」是「修复建议影响性」的子串。
+COLUMN_KEYWORDS = {
+    "goal": ("排障目标", "告警名"),
+    "topology": ("组网场景",),
+    "no": ("排障步骤编号", "步骤编号"),
+    "desc": ("排障步骤描述", "步骤描述"),
+    "detail": ("步骤详细描述", "详细描述"),
+    "rag": ("本步骤需要使用的命令行的编号", "ragindex", "命令行的编号"),
+    "command": ("命令行",),
+    "echo": ("回显",),
+    "fix": ("配置修复建议", "修复建议"),
+    "impact": ("修复建议影响性", "影响性"),
+    "verify": ("修复验证",),
+}
+
+# 没有这两列就不是排障步骤表（说明页、封面之类），整个 sheet 跳过。
+# 其余列都可以缺：缺了只是少一块输入，不该让整张表跑不起来。
+REQUIRED_COLUMNS = ("no", "detail")
+
+# 打印用的列名（表头原文太长）
+COLUMN_LABELS = {
+    "goal": "排障目标", "topology": "组网场景", "no": "步骤编号", "desc": "步骤描述",
+    "detail": "详细描述", "rag": "ragIndex", "command": "命令行", "echo": "回显",
+    "fix": "配置修复建议", "impact": "影响性", "verify": "修复验证",
+}
+
+# 这几列填了占位符（NA / 无 / -）按空处理，其余列不做这个处理（见 _optional_cell）
+OPTIONAL_VALUE_FIELDS = ("rag", "command", "echo", "fix", "impact", "verify")
 
 # 场景名 → skill 相对路径。不写在这里时按 derive_skill_path 从告警名推。
 # 让模型自己编路径会导致同一张表重跑生成不同文件名（案例合并流水线上已经吃过这个亏，
@@ -199,6 +220,43 @@ def _optional_cell(ws, row: int, col: int) -> str:
     return "" if text.lower() in CELL_PLACEHOLDERS else text
 
 
+def _field(ws, row: int, columns: dict, field: str) -> str:
+    """按认出来的列读一格；表里没有这一列就是空。"""
+    col = columns.get(field)
+    if not col:
+        return ""
+    if field in OPTIONAL_VALUE_FIELDS:
+        return _optional_cell(ws, row, col)
+    return _cell(ws, row, col)
+
+
+def map_columns(ws) -> dict:
+    """按表头认列，返回 字段 → 列号；认不出的列忽略。"""
+    columns, matched = {}, {}
+    for col in range(1, (ws.max_column or 0) + 1):
+        header = _cell(ws, HEADER_ROW, col).lower()
+        if not header:
+            continue
+        field, length = None, 0
+        for name, keywords in COLUMN_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword.lower() in header and len(keyword) > length:
+                    field, length = name, len(keyword)
+        # 同一字段被两列匹配到时（如「命令行」和「…命令行的编号…」），
+        # 留匹配得更贴切的那列
+        if field and length > matched.get(field, 0):
+            columns[field], matched[field] = col, length
+    return columns
+
+
+def _step_number(text: str):
+    """步骤编号转成整数；不是数字就返回 None。"""
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
 RAG_INDEX_PATTERN = re.compile(r"^\s*(\d+)\s*[：:、.,]\s*(.*)$")
 
 
@@ -247,9 +305,12 @@ def load_scenarios(path: str, sheet_name: str = None) -> list:
 def parse_sheet(xlsx_path: str, sheet_name: str = None) -> list:
     """解析排障步骤表，返回场景列表。
 
-    一个 sheet 放多个场景，靠首列分块：首列非空的行是一个场景的开始，到下一个
-    首列非空的行之前都属于这个场景。合并单元格天然满足这个规则（openpyxl 里
-    合并区间只有左上角那一格有值），单步场景没有合并区间也照样能切。
+    列按**表头**认（见 map_columns），不按列序：各家的表列数不一样。
+
+    一个 sheet 放多个场景，靠场景列（排障目标，没有就用组网场景）分块：该列非空
+    的行是一个场景的开始，到下一个非空行之前都属于这个场景。合并单元格天然满足
+    这个规则（openpyxl 里合并区间只有左上角那一格有值）。这一列整列为空时退回
+    按步骤编号分块（编号回到 1 即下一个场景）。
 
     不指定 sheet_name 时**遍历所有 sheet**：一个工作簿按协议分几个 sheet 是常态，
     只读第一个会静默漏掉其余的。整个 sheet 首列全空（说明那是说明页、封面之类）
@@ -270,18 +331,44 @@ def parse_sheet(xlsx_path: str, sheet_name: str = None) -> list:
     for ws in sheets:
         scenarios += _parse_worksheet(ws, xlsx_path)
     if not scenarios:
+        seen = "；".join(
+            f"sheet「{ws.title}」认出的列：{'、'.join(sorted(map_columns(ws))) or '无'}"
+            for ws in sheets)
         raise ValueError(
-            f"{xlsx_path} 里没有解析到任何场景：首列（排障目标）全为空。"
-            f"一个场景的所有步骤行要用合并单元格圈起来，"
-            f"或至少在该场景第一行的首列写上排障目标。")
+            f"{xlsx_path} 里没有解析到任何场景。列是按表头认的，"
+            f"至少要有「排障步骤编号」和「步骤详细描述」两列（{seen}）；"
+            f"多个场景放一个 sheet 时，用合并单元格在「排障目标」或「组网场景」列"
+            f"圈出每个场景的步骤行，都没有就靠步骤编号回到 1 分块。")
     return scenarios
 
 
+def _scenario_starts(ws, columns: dict) -> list:
+    """一个 sheet 里每个场景从哪一行开始。
+
+    首选按**场景列**（排障目标，没有就用组网场景）分块：该列非空的行是一个场景的
+    开始，合并单元格天然满足（openpyxl 里合并区间只有左上角那一格有值）。
+
+    这一列整列为空时退回按**步骤编号**分块：编号回到 1 就是下一个场景。有的表
+    没有排障目标这一列，组网场景那格又只放了张截图（读出来是空），一味认场景列
+    的话整张表会被当成"没有场景"跳过。
+    """
+    block_col = columns.get("goal") or columns.get("topology")
+    if block_col:
+        starts = [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
+                  if _cell(ws, row, block_col)]
+        if starts:
+            return starts
+    return [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
+            if _step_number(_field(ws, row, columns, "no")) == 1]
+
+
 def _parse_worksheet(ws, xlsx_path: str) -> list:
-    starts = [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
-              if _cell(ws, row, COL_GOAL)]
+    columns = map_columns(ws)
+    if any(field not in columns for field in REQUIRED_COLUMNS):
+        return []      # 说明页/封面这类没有步骤表结构的 sheet，跳过
+    starts = _scenario_starts(ws, columns)
     if not starts:
-        return []      # 说明页/封面这类没有场景的 sheet，跳过
+        return []
 
     scenarios = []
     for i, start in enumerate(starts):
@@ -290,33 +377,39 @@ def _parse_worksheet(ws, xlsx_path: str) -> list:
         for row in range(start, end + 1):
             # 整行都空的尾行（Excel 常留空行）跳过。命令列按占位符规则读，
             # 免得只写了个 NA 的空行被当成一个步骤。
-            if not any((_cell(ws, row, col) for col in
-                        (COL_STEP_NO, COL_STEP_DESC, COL_STEP_DETAIL))) \
-                    and not _optional_cell(ws, row, COL_COMMAND):
+            if not any(_field(ws, row, columns, f) for f in ("no", "desc", "detail")) \
+                    and not _field(ws, row, columns, "command"):
                 continue
-            rag_no, rag_purpose = parse_rag_index(_optional_cell(ws, row, COL_RAG_INDEX))
+            rag_no, rag_purpose = parse_rag_index(_field(ws, row, columns, "rag"))
             steps.append({
                 "row": row,
-                "no": _cell(ws, row, COL_STEP_NO),
-                "desc": _cell(ws, row, COL_STEP_DESC),
-                "detail": _cell(ws, row, COL_STEP_DETAIL),
+                "no": _field(ws, row, columns, "no"),
+                "desc": _field(ws, row, columns, "desc"),
+                "detail": _field(ws, row, columns, "detail"),
                 "rag_no": rag_no,
                 "rag_purpose": rag_purpose,
-                "command": _optional_cell(ws, row, COL_COMMAND),
-                "echo": _optional_cell(ws, row, COL_ECHO),
-                "fix": _optional_cell(ws, row, COL_FIX),
-                "impact": _optional_cell(ws, row, COL_IMPACT),
-                "verify": _optional_cell(ws, row, COL_VERIFY),
+                "command": _field(ws, row, columns, "command"),
+                "echo": _field(ws, row, columns, "echo"),
+                "fix": _field(ws, row, columns, "fix"),
+                "impact": _field(ws, row, columns, "impact"),
+                "verify": _field(ws, row, columns, "verify"),
             })
-        goal = _cell(ws, start, COL_GOAL)
+        goal = _field(ws, start, columns, "goal")
+        topology = _field(ws, start, columns, "topology")
+        # 场景名依次退：排障目标 → 组网场景 → sheet 名。表里没写告警名时
+        # sheet 名通常就是它，至少比"场景1"能认出是哪张表。
+        title = (goal or topology or ws.title).splitlines()[0].strip()
+        if not (goal or topology) and len(starts) > 1:
+            title = f"{title}-场景{i + 1}"
         scenarios.append({
             "goal": goal,
-            "name": goal.splitlines()[0].strip() if goal else f"场景{i + 1}",
-            "topology": _cell(ws, start, COL_TOPOLOGY),
+            "name": title or f"场景{i + 1}",
+            "topology": topology,
             "steps": steps,
             "rows": (start, end),
             "sheet": ws.title,
             "source": xlsx_path,
+            "columns": columns,
         })
     return scenarios
 
@@ -462,7 +555,9 @@ def format_scenario(scenario: dict) -> str:
     （步骤4~8 都在读步骤1 的回显），清单能让模型看清哪些步骤共用一次命令执行，
     避免改写成每个分支各跑一遍同样的命令。
     """
-    lines = [f"## 排障目标\n{scenario['goal']}"]
+    # 表里没有「排障目标」列时退回场景名（多半是 sheet 名）：这一段是模型判断
+    # "这篇 skill 是给什么故障用的"的唯一依据，空着会让 frontmatter 全靠猜。
+    lines = [f"## 排障目标\n{scenario['goal'] or scenario['name']}"]
     if scenario["topology"]:
         lines.append(f"\n## 组网场景\n{scenario['topology']}")
 
@@ -534,13 +629,19 @@ def build_format_spec(scenario: dict) -> str:
     causes = extract_root_causes(scenario)
     return (load_skill_template() + "\n\n" + SCENARIO_SPEC
             .replace("<derived_params>",
-                     "、".join(f"`<{p}>`" for p in params) or "（表里的命令没有参数）")
+                     "、".join(f"`<{p}>`" for p in params)
+                     or "（表里的命令没有用尖括号写参数。命令里那些随设备而变的"
+                        "占位词——如 `display cpu-usage process process-id` 里的 "
+                        "`process-id`、`[ slot slot-id ]` 里的 `slot-id`——仍然是参数，"
+                        "正文里写成 `<process-id>`、`<slot-id>` 并补进入参列表）")
             .replace("<root_causes>",
                      "\n".join(
                          f"{i}. {c['text']}（来自步骤{c['step']}"
                          f"{'，无故障分支' if c['normal'] else ''}）"
                          for i, c in enumerate(causes, 1))
-                     or "（表里没有明确写出判定结论，按步骤描述自行归纳）"))
+                     or "（这张表没有用 提示/返回“xxx” 写明结论。请从"
+                        "“认为是X导致”“初步定位原因是X”这类句子里归纳根因名称，"
+                        "排查步骤和根因对照表两处逐字一致）"))
 
 
 # ---------------------------------------------------------------- 输出校验
@@ -667,6 +768,11 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
     # 顺手编出 <as-number>、<peer-ip> 这种表里没有、用户也没处填的参数——
     # 冒出未申报的参数正是"CLI是编的"最可靠的信号。
     from_sheet = {re.sub(r"[\s\-_]", "", p).lower() for p in scenario_params}
+    # 表里的参数名不一定带尖括号（`display cpu-usage process process-id`），
+    # 只按 <> 找会把它当成模型自己编的参数，报错方向正好是反的，所以再拿
+    # 去掉分隔符的原文兜一层。
+    sheet_text = re.sub(r"[\s\-_]", "",
+                        source_command_text(scenario) if scenario else "").lower()
     listed = "、".join(f"「{row[0]}」" for row in rows) or "（空）"
     for span in cli_lines(content):
         for param in re.findall(r"<([^>\n]+)>", span):
@@ -674,7 +780,8 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
                 continue
             # 表里本来就有这个参数 → 该补进入参列表；表里没有 → 这条CLI是编的。
             # 两种情况改法相反，不说清楚模型会往错的方向修。
-            if _param_declared(param, from_sheet):
+            if (_param_declared(param, from_sheet)
+                    or re.sub(r"[\s\-_]", "", param).lower() in sheet_text):
                 return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行。"
                         f"这个参数在步骤表的命令里就有，**把它补进入参列表**——"
                         f"能由用户/告警提供的填「是」，只能从前面步骤的回显里取的填「否」"
@@ -744,6 +851,8 @@ BAD_PLACEHOLDER = re.compile(r"\{[^}\n]+\}|\[\s*[a-z][^\]\n]*\]|\bXXX+\b")
 OPTIONAL_SYNTAX = re.compile(r"[\[{]")
 # 单个 <参数>
 COMMAND_PARAM = re.compile(r"^<[^>]*>$")
+# 中文字符。命令都是 ASCII，描述里的命令后面直接跟中文时靠它切开
+CJK = re.compile(r"[\u4e00-\u9fff]")
 # 表内编号说法，改写后不该留下
 TABLE_REFERENCE = re.compile(r"\d+\s*号命令(行)?|执行\s*\d+\s*号")
 
@@ -833,9 +942,15 @@ def step_commands(step: dict) -> list:
 def command_tokens(text: str) -> list:
     """把命令切成词，`<参数>` 整个算一个词。
 
-    转义的反斜杠先去掉：markdown 表格里的 `|` 必须写成 `\\|`。
+    转义的反斜杠先去掉（markdown 表格里的 `|` 必须写成 `\\|`）；`[ ]`/`{ }` 这类
+    表示可选/多选的语法记号只当分隔符，里面的词照常参与比对。
     """
-    return re.findall(r"<[^>\n]*>|\S+", (text or "").replace("\\", "").lower())
+    text = re.sub(r"[\[\]{}]", " ", (text or "").replace("\\", ""))
+    # 中文不带空格，`执行display users命令` 里的命令会和汉字粘成一个词，所以中文
+    # （连同中文标点、全角符号）也当分隔符——`<端口>` 这种中文参数名由前一个
+    # 分支整体匹配，不受影响。
+    return re.findall(r"<[^>\n]*>|[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+",
+                      text.lower())
 
 
 def command_covers(required: list, span: list) -> bool:
@@ -894,31 +1009,62 @@ def closest_span(required: list, spans: list) -> str:
     return best
 
 
-def known_commands(scenario: dict) -> set:
-    """步骤表里出现过的查询命令（命令行列 + 修复建议列 + 修复验证列）。"""
-    known = set()
-    for step in scenario["steps"]:
-        for field in ("command", "fix", "verify"):
-            for match in re.finditer(r"(?:display|tracert|ping)[^\n，。；]*",
-                                     step.get(field) or ""):
-                normalized = _normalize_command(match.group(0))
-                if normalized:
-                    known.add(normalized)
-    return known
-
-
 # 命令的来源只认这四列，**回显列不算**。回显是某台设备当时的输出，里面有
 # `bgp 100`、`peer 1::2 enable`、`segment-list 1`——把它当命令来源，等于给
 # "照着回显编一段配置"开了后门，而那正是要拦的东西。
 COMMAND_SOURCE_FIELDS = ("command", "fix", "verify", "detail")
 
-def source_command_text(scenario: dict) -> str:
-    """步骤表里所有可以当作命令来源的文字，归一化后拼成一大串。"""
+
+def known_commands(scenario: dict) -> set:
+    """步骤表里出现过的查询命令。
+
+    来源和配置命令一样是那四列（见 COMMAND_SOURCE_FIELDS），**「步骤详细描述」
+    也算**：表里常有只在描述里出现的查询命令（"可以执行display users命令，查看
+    登录用户的IP地址"，而该步的「命令行」格写的是 NA），漏掉这一列就会把它判成
+    模型编的，而那正是表里让它执行的命令。
+    """
+    known = set()
+    for step in scenario["steps"]:
+        for field in COMMAND_SOURCE_FIELDS:
+            for match in re.finditer(r"(?:display|tracert|ping)[^\n，。；]*",
+                                     step.get(field) or ""):
+                # 描述里的命令后面常直接跟着中文（"执行display users命令，…"），
+                # 中文一进来就成了命令的一部分，比对时对不上
+                command = CJK.split(match.group(0))[0].strip()
+                if command:
+                    known.add(command)
+    return known
+
+
+def source_command_tokens(scenario: dict) -> list:
+    """把命令来源那几列切成一长串词，用来判断某条命令是不是表里出现过的。"""
+    return command_tokens(source_command_text_raw(scenario))
+
+
+def command_in_corpus(command: list, corpus: list) -> bool:
+    """这条命令（按词）是不是出现在语料里。逐词比而不是比子串：参数位置的写法
+    两边不一样（表里 `slot slot-id`、正文里 `slot <slot-id>`），比子串只有参数
+    落在末尾时才碰得上，夹在中间就永远对不上。"""
+    if not command:
+        return False
+    for i in range(len(corpus) - len(command) + 1):
+        if command_covers(command, corpus[i:i + len(command)]):
+            return True
+    return False
+
+
+def source_command_text_raw(scenario: dict) -> str:
+    """命令来源那几列的原文，拼成一大串。"""
     parts = []
     for step in scenario["steps"]:
         for field in COMMAND_SOURCE_FIELDS:
             parts.append(step.get(field) or "")
-    return _normalize_command(" \n ".join(parts))
+    return " \n ".join(parts)
+
+
+def source_command_text(scenario: dict) -> str:
+    """步骤表里所有可以当作命令来源的文字，归一化后拼成一大串。"""
+    return _normalize_command(source_command_text_raw(scenario))
 
 
 def check_commands_from_source(content: str, scenario: dict) -> str:
@@ -927,16 +1073,16 @@ def check_commands_from_source(content: str, scenario: dict) -> str:
     查询命令由 check_unknown_commands 单独比对（那边按整条命令比，更严）；
     这里覆盖配置命令——`undo shutdown`、`ipv6-family sr-policy` 这类。
     """
-    corpus = source_command_text(scenario)
+    corpus = source_command_tokens(scenario)
     for raw in cli_lines(content):
         if not COMMAND_LIKE.match(raw.strip()):
             continue
-        normalized = _normalize_command(raw)
+        tokens = command_tokens(raw)
         # 单个词（如去掉参数后只剩 `bgp`）太泛，比中了也说明不了什么；
         # 这类由"参数必须申报"那道检查兜住
-        if not normalized or " " not in normalized:
+        if len([t for t in tokens if not COMMAND_PARAM.match(t)]) < 2:
             continue
-        if normalized not in corpus:
+        if not command_in_corpus(tokens, corpus):
             return (f"CLI `{raw.strip()}` 在步骤表里没有出现过——只能使用源文档里"
                     f"给出的命令，不要自己生成。表里只给了修复方向没给命令时，"
                     f"照实写方向即可")
@@ -963,13 +1109,15 @@ def check_hardcoded_operands(content: str) -> str:
 
 def check_unknown_commands(content: str, scenario: dict) -> str:
     """不许编造步骤表里没有的查询命令。"""
-    known = known_commands(scenario)
+    known = [command_tokens(k) for k in known_commands(scenario)]
     for raw in cli_lines(content):
         if not QUERY_PREFIX.match(raw):
             continue
-        normalized = _normalize_command(raw)
-        if not normalized or any(normalized == k or normalized in k or k in normalized
-                                 for k in known):
+        tokens = command_tokens(raw)
+        # 两个方向都认：正文里可以只写表里那条命令的前一段（省掉可选参数），
+        # 也可以在后面接 `| include xxx`
+        if not tokens or any(command_covers(k, tokens) or command_covers(tokens, k)
+                             for k in known):
             continue
         return (f"正文里的 `{raw}` 在步骤表中不存在——表没给的命令不要自己编，"
                 f"没有可用命令时写到根因判定为止")
@@ -1317,6 +1465,15 @@ def main(XLSX_PATH, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
         print(f"    ● {scenario['name']}（sheet {scenario['sheet']} "
               f"第{scenario['rows'][0]}-{scenario['rows'][1]}行，"
               f"{len(scenario['steps'])} 步）→ {skill_path}")
+        # 列是按表头认的，缺了哪列直接说——认错列的表跑出来的skill会整篇跑偏，
+        # 而那时已经花掉了模型调用
+        absent = [COLUMN_LABELS[f] for f in COLUMN_LABELS
+                  if f not in scenario.get("columns", {})]
+        if absent:
+            present = [COLUMN_LABELS[f] for f in COLUMN_LABELS
+                       if f in scenario.get("columns", {})]
+            print(f"        认出的列：{'、'.join(present)}"
+                  f"（表里没有：{'、'.join(absent)}）")
         issues = audit_commands(scenario) + audit_step_numbers(scenario)
         if issues:
             audit.append((scenario["name"], issues))
@@ -1374,6 +1531,29 @@ def main(XLSX_PATH, OUTPUT_DIR, API_URL, MODEL_NAME, WORKERS, REPORT_PATH,
         sys.exit(1)
 
 
+def match_scenario(content: str, scenarios: list):
+    """按正文里写了哪些命令，认出这篇 skill 对应步骤表里的哪个场景。
+
+    只有一个场景时直接用它。多个场景时取命中命令最多的那个，并列或一条都没命中
+    就返回 None——宁可跳过校验，也不要拿错的场景去比对命令。
+    """
+    if len(scenarios) == 1:
+        return scenarios[0]
+    spans = [command_tokens(span) for span in INLINE_CODE.findall(content)]
+    scored = []
+    for scenario in scenarios:
+        required = [command_tokens(OPTIONAL_SYNTAX.split(command)[0])
+                    for step in scenario["steps"] for command in step_commands(step)]
+        scored.append((sum(1 for r in required
+                           if r and any(command_covers(r, s) for s in spans)), scenario))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    if not scored or not scored[0][0]:
+        return None
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
 def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
     """对已有的skill文件单独跑一遍格式校验，不调模型。
 
@@ -1386,10 +1566,11 @@ def validate_files(paths: list, xlsx_path: str, sheet_name: str = None) -> int:
     failures = 0
     for path in paths:
         content = open(path, 'r', encoding='utf-8', errors='replace').read()
-        # 按文件名找对应场景；只有一个场景时直接用它
+        # 先按文件名找对应场景，找不到就看正文写了谁的命令（样例文件名和
+        # 推导出来的 skill 名对不上，按名字找会一律跳过，等于没校验）
         key = next((k for k in by_path if os.path.basename(k) == os.path.basename(path)),
                    None)
-        scenario = by_path[key] if key else (scenarios[0] if len(scenarios) == 1 else None)
+        scenario = by_path[key] if key else match_scenario(content, scenarios)
         if scenario is None:
             print(f"[SKIP] {path}: 在步骤表里找不到同名场景，无法核对命令是否齐全")
             continue
