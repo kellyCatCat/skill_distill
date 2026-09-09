@@ -20,7 +20,8 @@ import sys
 from excel_skill_distill_pipeline import (check_hardcoded_operands,
                                           check_skill_format,
                                           check_unknown_commands,
-                                          normalize_root_causes, parse_sheet)
+                                          normalize_root_causes, parse_sheet,
+                                          step_commands)
 
 SAMPLE_PATH = "excel_cases/sample_skill.md"
 
@@ -256,6 +257,12 @@ DIRECT_CASES = [
      (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
                        "`display cpu-usage service [ slot slot-id ]`", 99),
       CPU_SCENARIO), "语法记号"),
+    # 多条命令的格子常带列表编号，编号是填表人排版用的，不是命令的一部分——
+    # 不剥掉就会要求正文里出现一条 `1.` 开头的命令，模型怎么写都过不了
+    ("命令行格里的列表编号不算命令的一部分", step_commands,
+     ({"command": "1. display users\n2、display cpu-usage process\n- display this"},),
+     ["display users", "display cpu-usage process", "display this"]),
+
     # 模型给的根因清单要先规整：一整句话不是根因名，重复的只留一条，
     # 步骤号要能换算回步骤表的行号（报错时要指出处）
     ("根因清单：整句话丢掉、重复只留一条、补上行号", normalize_root_causes,

@@ -651,17 +651,18 @@ def format_scenario(scenario: dict) -> str:
     # 清单按**命令本身**去重，不按 ragIndex：表里 ragIndex 可能重号（同一个号
     # 指向两条不同的命令），按号去重会让后一条被静默丢掉，清单于是和步骤里写的
     # 命令对不上——模型拿到自相矛盾的映射，多半会给那一步写错命令。
+    # 一格里的多条命令逐条列（step_commands 顺带剥掉 `1.` 这类列表编号）：
+    # 整格当一条列出来，模型会照着写出一条带编号、带换行的"命令"。
     commands = {}
     for step in scenario["steps"]:
-        if not step["command"]:
-            continue
-        entry = commands.setdefault(step["command"], {
-            "indexes": [], "purpose": step["rag_purpose"], "echo": step["echo"],
-            "first_row": step["row"]})
-        if step["rag_no"] is not None and step["rag_no"] not in entry["indexes"]:
-            entry["indexes"].append(step["rag_no"])
-        if not entry["echo"] and step["echo"]:
-            entry["echo"] = step["echo"]
+        for command in step_commands(step):
+            entry = commands.setdefault(command, {
+                "indexes": [], "purpose": step["rag_purpose"], "echo": step["echo"],
+                "first_row": step["row"]})
+            if step["rag_no"] is not None and step["rag_no"] not in entry["indexes"]:
+                entry["indexes"].append(step["rag_no"])
+            if not entry["echo"] and step["echo"]:
+                entry["echo"] = step["echo"]
 
     # 一个号指向多条命令时，明确告诉模型别按号认命令，按步骤自己写的命令行认
     by_index = {}
@@ -689,11 +690,11 @@ def format_scenario(scenario: dict) -> str:
     for step in scenario["steps"]:
         block = [f"\n### 步骤{step['no']}：{step['desc']}",
                  f"详细描述：{step['detail']}"]
-        if step["rag_no"] is not None and step["command"]:
-            block.append(f"使用命令{step['rag_no']}（{step['rag_purpose']}）："
-                         f"{step['command']}")
-        elif step["command"]:
-            block.append(f"使用命令：{step['command']}")
+        used = "\n".join(step_commands(step))
+        if step["rag_no"] is not None and used:
+            block.append(f"使用命令{step['rag_no']}（{step['rag_purpose']}）：{used}")
+        elif used:
+            block.append(f"使用命令：{used}")
         else:
             block.append("本步骤不执行新命令，读前面某条命令的回显即可")
         if step["fix"]:
@@ -1015,15 +1016,29 @@ def _normalize_command(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+# 命令行格里的列表编号：`1. display xxx`、`2、display yyy`、`(3) display zzz`、
+# `- display www`。命令本身不会以数字或短横开头，所以照着行首剥掉是安全的。
+LIST_MARKER = re.compile(
+    r"^\s*(?:[（(]?\d+\s*[）).、:：]\s*|\d+\s+|[-*•·]\s*|[①-⑳]\s*)")
+
+
 def step_commands(step: dict) -> list:
-    """一格里可能写了不止一条命令，逐行拆开。
+    """一格里可能写了不止一条命令，逐行拆开，并剥掉行首的列表编号。
 
     实际的表就有这种写法：`命令行`格里写 `interface <端口>` 换行 `display this`，
     那是要连着敲的两条命令。整格当一条比对，就会要求正文里出现一段带换行的
     "命令"——模型不可能那么写，于是三次重试全废。
+
+    多条命令的格子常常还带编号（`1. display netconf data-flow statistics verbose`）。
+    编号是填表人排版用的，不是命令的一部分：不剥掉就会要求正文里出现一条叫
+    "1." 开头的命令，模型同样怎么写都过不了。
     """
-    return [line.strip() for line in (step.get("command") or "").splitlines()
-            if line.strip()]
+    lines = []
+    for line in (step.get("command") or "").splitlines():
+        line = LIST_MARKER.sub("", line).strip()
+        if line:
+            lines.append(line)
+    return lines
 
 
 def command_tokens(text: str) -> list:

@@ -9,6 +9,7 @@
   - 「组网场景」列是合并单元格，但里面是空的（原表放的是截图）——所以场景分块
     只能靠步骤编号回到 1；
   - ragIndex 列里只写用途、不写编号（`查看单板上进程CPU占用率`）；
+  - 一格里两条命令，还带着 `1.` `2.` 的列表编号；
   - 命令里的参数**不带尖括号**（`display cpu-usage process process-id`），
     可选参数用 `[ ]` 圈着（`display cpu-usage process [ slot slot-id ]`）。
 
@@ -147,7 +148,8 @@ STEPS = [
      "2. 诊断视图下，执行display aaa online-fail-record statistics命令查看2天内，"
      "每10分钟数量最多的5条上线失败原因。",
      "查看用户上线和下线失败原因",
-     "display aaa offline-record statistics\ndisplay aaa online-fail-record statistics"),
+     # 多条命令的格子常常带编号，编号是排版用的、不是命令的一部分
+     "1. display aaa offline-record statistics\n2. display aaa online-fail-record statistics"),
     (14, "查看UCM模块下线原因统计信息",
      "如果步骤2无法查看用户下线原因，请在诊断视图下执行display ucm statistics offline-reason命令，"
      "查看UCM模块下线原因统计信息。可以先执行reset ucm statistics offline-reason命令清除UCM的统计信息，"
