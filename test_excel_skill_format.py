@@ -17,12 +17,13 @@ import copy
 import re
 import sys
 
-from excel_skill_distill_pipeline import (check_hardcoded_operands,
+from excel_skill_distill_pipeline import (check_commands_from_source,
+                                          check_hardcoded_operands,
                                           check_skill_format,
                                           check_unknown_commands,
                                           collect_parameters,
-                                          normalize_root_causes, parse_sheet,
-                                          step_commands)
+                                          normalize_root_causes, parse_rag_index,
+                                          parse_sheet, step_commands)
 
 SAMPLE_PATH = "excel_cases/sample_skill.md"
 
@@ -207,6 +208,24 @@ def with_process(command_text: str, declare: bool = True) -> str:
     return content
 
 
+# 第三张基准表：11+1 列的完整形态，但「排障目标」每行重填而不是合并、表尾多一列
+# 「R23.0是否支持」、ragIndex 那格是带编号的两条用途、修复用的 CLI 填在了
+# 「修复建议影响性」那格里。见 excel_cases/build_cpu_alarm_sheet.py。
+CPU_ALARM_PATH = "excel_cases/CPU利用率超限定位步骤表.xlsx"
+CPU_ALARM_SCENARIOS = parse_sheet(CPU_ALARM_PATH)
+CPU_ALARM_SCENARIO = CPU_ALARM_SCENARIOS[0]
+CPU_ALARM_SCENARIO["root_causes"] = [
+    {"step": "2", "row": 3, "text": "路由协议震荡", "normal": False},
+    {"step": "5", "row": 6, "text": "报文攻击导致CPU冲高", "normal": False},
+]
+CPU_ALARM_GOOD = open("excel_cases/sample_skill_cpu_alarm.md", encoding="utf-8").read()
+
+
+def scenario_shape(scenarios: list) -> list:
+    """[场景数, 每个场景的步骤数]，用来验分块切对了没有。"""
+    return [len(scenarios)] + [len(s["steps"]) for s in scenarios]
+
+
 # 单独直查的用例：这些分支在 check_skill_format 里会被更早的检查抢先命中，
 # 但分支本身的行为仍要验（否则改动它时没人发现）。
 DIRECT_CASES = [
@@ -268,6 +287,22 @@ DIRECT_CASES = [
     # 它们"会让模型给它补一行
     ("设备提示符不当成参数", collect_parameters, (CPU_SCENARIO,),
      ["car-index", "begin-time", "end-time"]),
+    # ---- 第三张基准表（列全、但排障目标每行重填，见文件开头） ----
+    ("完整列形态的合规样例", check_skill_format,
+     (CPU_ALARM_GOOD, CPU_ALARM_SCENARIO), ""),
+    # 排障目标每行重填而不是合并：只看"这格非空"会切成 8 个一步的场景
+    ("每行重填的排障目标算一个场景", scenario_shape, (CPU_ALARM_SCENARIOS,), [1, 8]),
+    # ragIndex 那格写了两条带编号的用途，那是给两条命令各写了一句，不是 ragIndex
+    ("多行带编号的用途不当成ragIndex", parse_rag_index,
+     ("1. 查看NETCONF查询操作详细统计信息\n2. 查看NETCONF全量同步操作详细统计信息",),
+     (None, "1. 查看NETCONF查询操作详细统计信息\n2. 查看NETCONF全量同步操作详细统计信息")),
+    # 修复用的 CLI 填在了「修复建议影响性」那格里，照着它写的命令不算编造
+    ("影响性列里的修复CLI要放行", check_commands_from_source,
+     ("修复：`system-view` → `slot <slot-id>` → `cpu-defend-policy 8`",
+      CPU_ALARM_SCENARIO), ""),
+    ("哪一列都没有的CLI仍要拦", check_commands_from_source,
+     ("修复：`cpu-defend-policy 8 acl 3000`", CPU_ALARM_SCENARIO),
+     "在步骤表里没有出现过"),
     ("另一张表照抄方括号要拦", check_skill_format,
      (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
                        "`display cpu-usage service [ slot slot-id ]`", 99),
@@ -303,14 +338,14 @@ def run() -> int:
     failures = 0
     for name, func, args, expect in DIRECT_CASES:
         got = func(*args)
-        if isinstance(expect, list):        # 返回值不是错误说明而是数据
+        if not isinstance(expect, str):     # 返回值不是错误说明而是数据
             ok = got == expect
         else:
             ok = (got == "") if expect == "" else (expect in got)
         if not ok:
             failures += 1
         print(f"[{'PASS' if ok else 'FAIL'}] {name}")
-        if got and not isinstance(got, list):
+        if got and isinstance(got, str):
             print(f"        → {got}")
         if not ok:
             print(f"        实际: {got!r}\n        期望: {expect!r}")

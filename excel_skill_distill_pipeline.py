@@ -73,7 +73,8 @@ COLUMN_LABELS = {
 }
 
 # 这几列填了占位符（NA / 无 / -）按空处理，其余列不做这个处理（见 _optional_cell）
-OPTIONAL_VALUE_FIELDS = ("rag", "command", "echo", "fix", "impact", "verify")
+OPTIONAL_VALUE_FIELDS = ("topology", "rag", "command", "echo", "fix",
+                         "impact", "verify")
 
 # 场景名 → skill 相对路径。不写在这里时按 derive_skill_path 从告警名推。
 # 让模型自己编路径会导致同一张表重跑生成不同文件名（案例合并流水线上已经吃过这个亏，
@@ -259,6 +260,9 @@ def _step_number(text: str):
 
 
 RAG_INDEX_PATTERN = re.compile(r"^\s*(\d+)\s*[：:、.,]\s*(.*)$")
+# 一格里写了不止一条带编号的用途（"1. 查看…" 换行 "2. 查看…"）——那是给两条命令
+# 各写了一句用途的列表，不是这一步的 ragIndex 编号。
+RAG_INDEX_LIST = re.compile(r"^\s*\d+\s*[：:、.,]", re.MULTILINE)
 
 
 def parse_rag_index(raw: str) -> tuple:
@@ -266,7 +270,13 @@ def parse_rag_index(raw: str) -> tuple:
 
     分隔符在表里就不统一（全角冒号、半角冒号、顿号都有），所以几种都认。
     拆不出编号时返回 (None, 原文)——这一列的写法不做格式校验，原文照样当用途用。
+
+    一格里有多行带编号时整格当用途、不取编号：那是给该步的两条命令各写了一句用途
+    （"1. 查看NETCONF查询操作…" / "2. 查看NETCONF全量同步操作…"），把开头那个 1
+    当成 ragIndex 的话，另一步的 "1. …" 就会和它凑成"一号两命令"的假重号。
     """
+    if len(RAG_INDEX_LIST.findall(raw or "")) > 1:
+        return None, (raw or "").strip()
     match = RAG_INDEX_PATTERN.match(raw or "")
     if not match:
         return None, (raw or "").strip()
@@ -346,8 +356,10 @@ def parse_sheet(xlsx_path: str, sheet_name: str = None) -> list:
 def _scenario_starts(ws, columns: dict) -> list:
     """一个 sheet 里每个场景从哪一行开始。
 
-    首选按**场景列**（排障目标，没有就用组网场景）分块：该列非空的行是一个场景的
-    开始，合并单元格天然满足（openpyxl 里合并区间只有左上角那一格有值）。
+    首选按**场景列**（排障目标，没有就用组网场景）分块：该列的值**变了**才是下一个
+    场景的开始。合并单元格天然满足（openpyxl 里合并区间只有左上角那一格有值），
+    而不合并、每行都把排障目标重填一遍的表也一样能切——只看"非空"的话，那种表会
+    被切成每行一个场景，一个八步的排障流程变成八篇一步的 skill。
 
     这一列整列为空时退回按**步骤编号**分块：编号回到 1 就是下一个场景。有的表
     没有排障目标这一列，组网场景那格又只放了张截图（读出来是空），一味认场景列
@@ -355,8 +367,12 @@ def _scenario_starts(ws, columns: dict) -> list:
     """
     block_col = columns.get("goal") or columns.get("topology")
     if block_col:
-        starts = [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
-                  if _cell(ws, row, block_col)]
+        starts, current = [], None
+        for row in range(HEADER_ROW + 1, ws.max_row + 1):
+            value = _cell(ws, row, block_col)
+            if value and value != current:
+                starts.append(row)
+                current = value
         if starts:
             return starts
     return [row for row in range(HEADER_ROW + 1, ws.max_row + 1)
@@ -1139,10 +1155,12 @@ def closest_span(required: list, spans: list) -> str:
     return best
 
 
-# 命令的来源只认这四列，**回显列不算**。回显是某台设备当时的输出，里面有
-# `bgp 100`、`peer 1::2 enable`、`segment-list 1`——把它当命令来源，等于给
-# "照着回显编一段配置"开了后门，而那正是要拦的东西。
-COMMAND_SOURCE_FIELDS = ("command", "fix", "verify", "detail")
+# 命令的来源是除「回显」外的各列。回显是某台设备当时的输出，里面有 `bgp 100`、
+# `peer 1::2 enable`、`segment-list 1`——把它当命令来源，等于给"照着回显编一段
+# 配置"开了后门，而那正是要拦的东西。其余几列都是填表人写的：修复用的 CLI 有时
+# 就落在「修复建议影响性」那格里（实际的表就有这么填的），把那一列排除在外，
+# 照着它写出来的命令会被判成模型自己编的。
+COMMAND_SOURCE_FIELDS = ("command", "fix", "verify", "detail", "impact")
 
 
 def known_commands(scenario: dict) -> set:
