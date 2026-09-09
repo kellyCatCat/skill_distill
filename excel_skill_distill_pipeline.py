@@ -205,7 +205,7 @@ def parse_rag_index(raw: str) -> tuple:
     """把"1：查询SRv6 TE Policy"拆成 (编号, 用途)。
 
     分隔符在表里就不统一（全角冒号、半角冒号、顿号都有），所以几种都认。
-    拆不出编号时返回 (None, 原文)，交给体检环节报出来。
+    拆不出编号时返回 (None, 原文)——这一列的写法不做格式校验，原文照样当用途用。
     """
     match = RAG_INDEX_PATTERN.match(raw or "")
     if not match:
@@ -301,7 +301,6 @@ def _parse_worksheet(ws, xlsx_path: str) -> list:
                 "detail": _cell(ws, row, COL_STEP_DETAIL),
                 "rag_no": rag_no,
                 "rag_purpose": rag_purpose,
-                "rag_raw": _optional_cell(ws, row, COL_RAG_INDEX),
                 "command": _optional_cell(ws, row, COL_COMMAND),
                 "echo": _optional_cell(ws, row, COL_ECHO),
                 "fix": _optional_cell(ws, row, COL_FIX),
@@ -322,21 +321,19 @@ def _parse_worksheet(ws, xlsx_path: str) -> list:
 
 
 def audit_commands(scenario: dict) -> list:
-    """体检 ragIndex：它是命令的稳定编号（给RAG检索用），重号会让命令查不准。
+    """体检 ragIndex 重号：它是命令的稳定编号（给RAG检索用），重号会让命令查不准。
 
-    返回问题说明列表（空列表表示没问题）。这类问题在解析阶段就该报出来，
-    不能带进 skill——步骤正文里写着"执行6号命令"，而6号对应两条不同的命令时，
-    改写出来的skill就会指向错的那条。
+    只查重号，不查这一列怎么写——写法五花八门也照样能用（拆不出编号的整段当用途）。
+    返回问题说明列表（空列表表示没问题）。重号在解析阶段就该报出来，不能带进 skill
+    ——步骤正文里写着"执行6号命令"，而6号对应两条不同的命令时，改写出来的skill
+    就会指向错的那条。
     """
     issues = []
     by_index = {}
     for step in scenario["steps"]:
+        # 拆不出编号的写法不报错：这一列怎么写不做格式约束，原文当用途用，
+        # 渲染时该步骤按“未编号”走（见 format_scenario）。
         if step["rag_no"] is None:
-            if step["rag_raw"]:
-                issues.append(
-                    f"步骤{step['no']}（第{step['row']}行）的ragIndex "
-                    f"{step['rag_raw']!r} 解析不出编号，需写成"
-                    f"“编号: 用途”的形式")
             continue
         by_index.setdefault(step["rag_no"], []).append(step)
 
