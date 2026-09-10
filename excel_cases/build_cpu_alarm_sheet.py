@@ -6,7 +6,8 @@
 
   - 「排障目标」列**每行都重填了一遍**，没有用合并单元格——只看"这一格非空"来分块
     的话，一个八步的排障流程会被切成八个一步的场景；
-  - 表尾多一列「R23.0是否支持」，是这张表自己加的，认列时要能忽略掉；
+  - 表尾多一列「R23.0是否支持」，是这张表自己加的，认列时要能忽略掉；再往后还拖着
+    一串**没有表头的空列**（原表导出来就是这样），也不能让认列乱掉；
   - 「组网场景」填的是 `不涉及`，按占位符读成空；
   - ragIndex 那格写的是**带编号的两条用途**（`1. 查看…` 换行 `2. 查看…`），那是给
     该步的两条命令各写了一句，不是这一步的 ragIndex 编号；
@@ -158,6 +159,9 @@ STEPS = [
      "", ""),
 ]
 
+# 表尾拖着多少列没表头的空列
+TRAILING_EMPTY_COLUMNS = 29
+
 HEADER_FILL = PatternFill("solid", fgColor="D9E1F2")
 
 
@@ -185,6 +189,12 @@ def build(output_path: str) -> str:
             font = MONO_FONT if (i - 1) in MONOSPACE_COLUMNS else TEXT_FONT
             cell.font = Font(name=font)
             cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # 表尾拖着的空列：原表导出来就带着几十列没表头的空列（单元格是空串而不是
+    # 不存在，所以 max_column 会一直数到那里），认列时要跳过它们
+    for i in range(len(HEADERS) + 1, len(HEADERS) + 1 + TRAILING_EMPTY_COLUMNS):
+        for row in range(1, len(STEPS) + 2):
+            ws.cell(row=row, column=i, value="")
 
     ws.freeze_panes = "A2"
     wb.save(output_path)

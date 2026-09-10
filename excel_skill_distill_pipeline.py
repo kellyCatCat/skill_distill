@@ -100,7 +100,7 @@ WRITING_RULES = """- 输出面向网管agent执行，凡是收集信息、联系
 - 表里"修复验证"列的内容写成该修复方案之后的验证动作，给出验证命令和期望看到的状态。
 - **只能使用步骤表里出现过的 CLI，一条都不许自己生成。** 可用的命令来源只有「命令行」「配置修复建议」「修复验证」「步骤详细描述」四列；**「回显」列不算命令来源**——它是某台设备当时的输出，不是配置模板。表里只写了"减少policy数量""BGP视图下配置ipv6-family sr-policy"这种没有具体命令的修复方向时，就照实写这句方向，**不要补全成可执行的配置序列**；也不要编造表里没有的查询命令（如 `display xxx summary`）来做验证。表里那一格是空的，就写"无直接修复CLI"并说明只能定位。
 - **禁止出现从回显样例抄来的具体值**。回显里的 `bgp 100`、`segment-list 1`、`policy1`、`1::1` 都是某台设备当时的取值，换一台就是错的：AS号、policy名、segment-list名、接口名、IP一律写成参数。回显只用来说明"该看哪个字段"。
-- **参数名沿用步骤表里的写法，不要翻译、不要另起**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。表里的参数**未必带尖括号**：`display cpu-usage process process-id` 里的 `process-id`、`[ { car-index <car-index> } ]` 里的 `car-index` 都是参数，正文里补上尖括号写成 `<process-id>`、`<car-index>` 即可，名字照抄（写成 `<car-id>` 就和表里对不上了），并把它们补进入参列表。
+- **参数名沿用步骤表里的写法，不要翻译、不要另起**。表里写 `<端口>` 就写 `<端口>`，不要改成 `<port-name>`、`<interface-name>`——换了名字就和入参列表、和表里的命令都对不上了。只允许规整分隔符（`<endpointipv6>` → `<endpoint-ipv6>`）。表里的参数**未必带尖括号**：命令里那些随设备而变的占位词（如 `display cpu-usage process process-id` 里的 `process-id`）仍然是参数，正文里补上尖括号写成 `<process-id>` 即可，名字照抄（换个名字就和表里对不上了），并补进入参列表。**本条以及其它约束里举的例子只是说明写法，不是本表的参数或命令**——上面「本场景的入参」列出来的才是，例子里的名字不要照搬进正文。
 - 表里命令中的 `[ ]`（如 `display cpu-usage process [ slot slot-id ]`）是标“可选参数”的语法记号，不是参数名，**正文里不要保留方括号**：要么整段省掉写成 `display cpu-usage process`，要么展开成 `display cpu-usage process slot <slot-id>` 并把该参数补进入参列表。
 - **正文里出现的每个 `<参数>` 都必须在入参列表里有对应行**。冒出没申报的参数，基本就说明那条CLI是编的——用户无处填，agent 也拿不到。
 - 修复手段和复检命令**只写在根因对照表里**，排查步骤的「根因定位」只给根因名称——同一份修复在两处各写一遍，改了一处忘另一处就会互相矛盾。"""
@@ -905,20 +905,31 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
             # 表里本来就有这个参数 → 该补进入参列表；表里没有 → 这条CLI是编的。
             # 两种情况改法相反，不说清楚模型会往错的方向修。
             key = re.sub(r"[\s\-_]", "", param).lower()
+            # 报错要指出是哪条命令：一篇 skill 里同一个参数可能出现好几处，
+            # 只说参数名的话模型得自己找，实测会连着几轮改不到点上
+            where = f"命令 `{span.strip()}` "
             # 名字被改过（表里写 car-index，正文写成 car-id）时，该做的是改回表里的
             # 写法，不是补一行、更不是删命令——三种改法互相矛盾，指错了模型要么留下
             # 一个表里没有的参数名，要么把本来对的命令删掉
             near = closest_sheet_param(param, scenario_params)
             if near and re.sub(r"[\s\-_]", "", near).lower() != key:
-                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行；"
+                return (f"{where}里用了参数 `<{param}>`，但入参列表里没有对应行；"
                         f"步骤表里这个参数写作 `<{near}>`——**参数名要沿用表里的写法**，"
                         f"改成 `<{near}>` 再补进入参列表。当前入参列表只有：{listed}")
             if _param_declared(param, from_sheet) or key in sheet_text:
-                return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行。"
+                return (f"{where}里用了参数 `<{param}>`，但入参列表里没有对应行。"
                         f"这个参数在步骤表的命令里就有，**把它补进入参列表**——"
                         f"能由用户/告警提供的填「是」，只能从前面步骤的回显里取的填「否」"
                         f"并注明来自哪一步。当前入参列表只有：{listed}")
-            return (f"命令里用了参数 `<{param}>`，但入参列表里没有对应行，"
+            # 表里的命令后面自己加了一段（多写了个过滤条件）时，去掉多的那段就行，
+            # 整条删掉反而把表里给的命令也删了
+            base = extending_command(span, scenario)
+            if base:
+                return (f"{where}里用了参数 `<{param}>`，但入参列表和步骤表里都没有"
+                        f"这个参数——它是在表里的 `{base}` 后面自己加出来的一段。"
+                        f"**把多出来的那段去掉**，只保留 `{base}`。"
+                        f"写作约束里举的例子不是本表的参数，不要照搬。")
+            return (f"{where}里用了参数 `<{param}>`，但入参列表里没有对应行，"
                     f"步骤表里也没有这个参数——说明这条CLI是自己编的，"
                     f"**删掉它**，照实写步骤表给的修复方向即可。"
                     f"当前入参列表只有：{listed}")
@@ -1289,6 +1300,24 @@ def available_commands(scenario: dict) -> list:
             seen.add(command)
             commands.append(command)
     return commands
+
+
+def extending_command(span: str, scenario: dict) -> str:
+    """正文这条命令是不是在表里某条命令后面又多加了一段；是的话返回表里那条。
+
+    模型给表里的命令补过滤条件（`display attack-source-trace slot <slot-id> verbose`
+    后面又加上一段过滤）时，该做的是把多出来的那段去掉，而不是把整条命令删掉——
+    命令本身是表里的。
+    """
+    tokens = command_tokens(span)
+    best = ""
+    for command in available_commands(scenario):
+        required = command_tokens(OPTIONAL_SYNTAX.split(command)[0])
+        if not required or len(tokens) <= len(required):
+            continue
+        if command_covers(required, tokens) and len(required) > len(command_tokens(best)):
+            best = command
+    return best
 
 
 def available_note(scenario: dict) -> str:

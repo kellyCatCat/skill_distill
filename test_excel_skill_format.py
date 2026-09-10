@@ -290,8 +290,19 @@ DIRECT_CASES = [
     # ---- 第三张基准表（列全、但排障目标每行重填，见文件开头） ----
     ("完整列形态的合规样例", check_skill_format,
      (CPU_ALARM_GOOD, CPU_ALARM_SCENARIO), ""),
-    # 排障目标每行重填而不是合并：只看"这格非空"会切成 8 个一步的场景
+    # 排障目标每行重填而不是合并：只看"这格非空"会切成 8 个一步的场景。
+    # 这张表尾部还拖着 29 列没表头的空列（原表导出来就带着），认列不能被它们带偏
     ("每行重填的排障目标算一个场景", scenario_shape, (CPU_ALARM_SCENARIOS,), [1, 8]),
+    ("表尾的空列不影响认列", sorted, (CPU_ALARM_SCENARIO["columns"],),
+     ["command", "desc", "detail", "fix", "goal", "impact", "no", "rag",
+      "topology", "verify"]),
+    # 写作约束里举的例子（如 `<car-index>`）不是每张表都有，模型照搬进正文时，
+    # 报错要指出是哪条命令带着它
+    ("表里没有的参数要指出是哪条命令", check_skill_format,
+     (CPU_ALARM_GOOD.replace("（确认攻击报文类型、接口与 VLAN 信息）",
+                             "（可用 `car-index <car-index>` 过滤）", 1),
+      CPU_ALARM_SCENARIO),
+     "命令 `car-index <car-index>` 里用了参数"),
     # ragIndex 那格写了两条带编号的用途，那是给两条命令各写了一句，不是 ragIndex
     ("多行带编号的用途不当成ragIndex", parse_rag_index,
      ("1. 查看NETCONF查询操作详细统计信息\n2. 查看NETCONF全量同步操作详细统计信息",),
