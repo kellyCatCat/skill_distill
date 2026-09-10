@@ -923,6 +923,12 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
                         f"并注明来自哪一步。当前入参列表只有：{listed}")
             # 表里的命令后面自己加了一段（多写了个过滤条件）时，去掉多的那段就行，
             # 整条删掉反而把表里给的命令也删了
+            form = corpus_form(span, scenario)
+            if form:
+                return (f"{where}里用了参数 `<{param}>`，但入参列表里没有对应行，"
+                        f"步骤表里也没有这个参数；表里这条命令写的是 `{form}`——"
+                        f"**照表里的写法写**：参数名照抄表里的，表里给的是具体值"
+                        f"（如 `cpu-defend-policy 8`）就照抄那个值，不要自己换成参数。")
             base = extending_command(span, scenario)
             if base:
                 return (f"{where}里用了参数 `<{param}>`，但入参列表和步骤表里都没有"
@@ -1242,6 +1248,16 @@ def check_commands_from_source(content: str, scenario: dict) -> str:
         if len([t for t in tokens if not COMMAND_PARAM.match(t)]) < 2:
             continue
         if not command_in_corpus(tokens, corpus):
+            base = extending_command(raw, scenario)
+            if base:
+                return (f"CLI `{raw.strip()}` 在步骤表里没有出现过：它是在表里的 "
+                        f"`{base}` 后面自己加了一段。**把多出来的那段去掉**，"
+                        f"只保留 `{base}`。")
+            form = corpus_form(raw, scenario)
+            if form:
+                return (f"CLI `{raw.strip()}` 在步骤表里没有出现过；表里这条写的是 "
+                        f"`{form}`——**照表里的写法写**（表里给的是具体值就照抄，"
+                        f"不要自己换成参数）。")
             return (f"CLI `{raw.strip()}` 在步骤表里没有出现过——只能使用源文档里"
                     f"给出的命令，不要自己生成。表里只给了修复方向没给命令时，"
                     f"照实写方向即可")
@@ -1278,6 +1294,10 @@ def check_unknown_commands(content: str, scenario: dict) -> str:
         if not tokens or any(command_covers(k, tokens) or command_covers(tokens, k)
                              for k in known):
             continue
+        base = extending_command(raw, scenario)
+        if base:
+            return (f"正文里的 `{raw}` 在步骤表中不存在：它是在表里的 `{base}` 后面"
+                    f"自己加了一段。**把多出来的那段去掉**，只保留 `{base}`。")
         return (f"正文里的 `{raw}` 在步骤表中不存在——表没给的命令不要自己编，"
                 f"没有可用命令时写到根因判定为止。{available_note(scenario)}")
     return ""
@@ -1318,6 +1338,24 @@ def extending_command(span: str, scenario: dict) -> str:
         if command_covers(required, tokens) and len(required) > len(command_tokens(best)):
             best = command
     return best
+
+
+def corpus_form(span: str, scenario: dict) -> str:
+    """表里这条命令原本是怎么写的。
+
+    模型把表里的具体值改成了参数（表里 `cpu-defend-policy 8`，正文写成
+    `cpu-defend-policy <car-id>`）时，要指出表里的原样——只说"这个参数表里没有"
+    的话，模型多半会把整条命令删掉，而命令本身是表里给的。
+    """
+    tokens = command_tokens(span)
+    if not tokens or all(COMMAND_PARAM.match(t) for t in tokens):
+        return ""
+    corpus = source_command_tokens(scenario)
+    for i in range(len(corpus) - len(tokens) + 1):
+        window = corpus[i:i + len(tokens)]
+        if window != tokens and command_covers(tokens, window):
+            return " ".join(window)
+    return ""
 
 
 def available_note(scenario: dict) -> str:
@@ -1509,6 +1547,33 @@ REPAIR_SUFFIX = """
 - 如果原因是"命令在步骤表里没有出现过"或"参数没有对应行"，正确的做法通常是**删掉那条自己编的命令**，改成照实写步骤表给的修复方向，而不是再编一条。
 """
 
+# 带上上一次输出的改写提问。只给原因、不给原文的话，模型是**重写**而不是**修改**：
+# 它看不到自己写了什么，同一处错误能连犯三次（实测 `cpu-defend-policy <car-id>`、
+# 自己加的 time-range 过滤、漏写一条命令，都是三次全废）。把原文放回去，这一次
+# 调用就成了"照着这条原因改这一处"，其余原样抄回。
+REPAIR_WITH_PREVIOUS = """
+
+# 上一次的输出没有通过校验，请在它的基础上**改这一处**
+
+原因：
+
+    <error>
+
+下面是你上一次输出的 skill 全文。**在它的基础上改**，只动与上面这条原因直接相关的
+地方，其余整段原样保留（包括已经写对的命令、参数名、根因名称和小节结构）：
+
+````markdown
+<previous>
+````
+
+改完重新输出完整的 json 代码块 + markdown 代码块（skill 全文，不要只给改动片段）。
+另外注意：
+- 如果原因是"命令在步骤表里没有出现过"或"参数在步骤表里也没有"，说明那条命令或那个
+  参数是自己加的，**把多出来的那段删掉**，照实写步骤表给的修复方向，不要再换一条命令试；
+- 如果原因是"某条命令没有以行内代码出现在正文里"，那条命令是步骤表给的，**把它补进
+  对应步骤**（用反引号包起来），不要改动别处。
+"""
+
 
 def _clean_error(error: str) -> str:
     """把 call_model_with_retry 包装过的错误还原成校验器的原话。
@@ -1522,12 +1587,30 @@ def _clean_error(error: str) -> str:
 
 
 def repair_prompt(question: str, error: str) -> str:
-    """校验没过时，把原因告诉模型再让它改。
+    """校验没过时，把原因告诉模型再让它改（手边没有上一次的原文时用这个）。
 
     默认的重试是把同一份 prompt 再发一遍，模型不知道自己哪儿错了，只能靠随机性
     碰运气——对 qwen 这档模型尤其浪费。带上原因它才知道要改什么。
     """
     return question + REPAIR_SUFFIX.replace("<error>", _clean_error(error))
+
+
+def make_repair_prompt(holder: dict):
+    """返回一个带上"上一次输出的全文"的改写提问函数。
+
+    holder 是 make_extractor 用来留住最后一次内容的那个字典，所以重试时拿得到
+    模型自己刚写的东西：这一次调用于是变成"照着这条原因改这一处"，而不是"再写一遍
+    并祈祷这回不犯同样的错"。holder 里还没有内容时（第一次调用就没提取出正文）
+    退回只给原因的老写法。
+    """
+    def _repair(question: str, error: str) -> str:
+        previous = (holder or {}).get("content") or ""
+        if not previous.strip():
+            return repair_prompt(question, error)
+        return question + (REPAIR_WITH_PREVIOUS
+                           .replace("<error>", _clean_error(error))
+                           .replace("<previous>", previous.strip()))
+    return _repair
 
 
 def convert_scenario(args: tuple) -> dict:
@@ -1555,7 +1638,7 @@ def convert_scenario(args: tuple) -> dict:
     reply = call_model_with_retry(api_url, model_name, prompt,
                                   extractor=make_extractor(scenario, holder),
                                   max_tokens=max_tokens, timeout=timeout,
-                                  retry_prompt=repair_prompt)
+                                  retry_prompt=make_repair_prompt(holder))
     if reply.startswith("错误："):
         result["error"] = reply
         # 留下最后一次的内容：多数失败只差一两处，人工改比整轮重跑快

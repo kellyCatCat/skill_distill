@@ -314,6 +314,18 @@ DIRECT_CASES = [
     ("哪一列都没有的CLI仍要拦", check_commands_from_source,
      ("修复：`cpu-defend-policy 8 acl 3000`", CPU_ALARM_SCENARIO),
      "在步骤表里没有出现过"),
+    # 表里写的是具体值（`cpu-defend-policy 8`），模型自作主张换成了参数：该说的是
+    # "照表里的写法写"，说"这条CLI是自己编的、删掉它"会把表里给的修复命令删掉
+    ("把表里的具体值换成参数要指出表里的写法", check_skill_format,
+     (CPU_ALARM_GOOD.replace("`cpu-defend-policy 8`", "`cpu-defend-policy <car-id>`", 1),
+      CPU_ALARM_SCENARIO), "表里这条命令写的是 `cpu-defend-policy 8`"),
+    # 给表里的命令补了个过滤条件：去掉多的那段就行，别把命令删了
+    ("给表里的命令加了一段要说去掉那段", check_skill_format,
+     (CPU_ALARM_GOOD.replace(
+         "`display attack-source-trace slot <slot-id> verbose`",
+         "`display attack-source-trace slot <slot-id> verbose "
+         "time-range from <begin-time> to <end-time>`", 1),
+      CPU_ALARM_SCENARIO), "把多出来的那段去掉"),
     ("另一张表照抄方括号要拦", check_skill_format,
      (CPU_GOOD.replace("`display cpu-usage service slot <slot-id>`",
                        "`display cpu-usage service [ slot slot-id ]`", 99),

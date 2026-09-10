@@ -180,11 +180,12 @@ def check_repair_loop() -> list:
     fork 之后子进程记的东西传不回来。
     """
     print("\n" + "#" * 72)
-    print("# D. 校验失败 → 带着原因重问 → 第二次通过")
+    print("# D. 校验失败 → 带着原因和上次原文重问 → 第二次通过")
     print("#" * 72)
 
     seen = []
     replies = iter([BAD_REPLY, GOOD_REPLY])
+    holder = {}
 
     def fake_post(url, json=None, headers=None, timeout=None, verify=None):
         seen.append(json["messages"][0]["content"])
@@ -194,8 +195,8 @@ def check_repair_loop() -> list:
     scenario = pipeline.parse_sheet(XLSX_PATH)[0]
     result = distill.call_model_with_retry(
         MOCK_URL, "qwen3.6-27b", "原始提问",
-        extractor=pipeline.make_extractor(scenario),
-        retry_prompt=pipeline.repair_prompt, retry_delay=0)
+        extractor=pipeline.make_extractor(scenario, holder),
+        retry_prompt=pipeline.make_repair_prompt(holder), retry_delay=0)
 
     failures = []
     if result.startswith("错误："):
@@ -207,6 +208,11 @@ def check_repair_loop() -> list:
             failures.append("D 第二次的prompt没有带上“上一次没通过校验”的说明")
         if "没有以行内代码" not in seen[1]:
             failures.append("D 第二次的prompt没有带上具体的失败原因")
+        # 只给原因不给原文的话，第二次是"重写"而不是"修改"——模型看不到自己写了
+        # 什么，同一处错误能连犯三次
+        if "name: srv6-te-policy-down" not in seen[1]:
+            failures.append("D 第二次的prompt没有带上上一次输出的全文，"
+                            "模型只能重写而不是照着改")
         if seen[1] == seen[0]:
             failures.append("D 第二次发的还是同一份prompt，没有把原因回传")
         print(f"  第一次prompt: {seen[0]!r}")
