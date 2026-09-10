@@ -407,7 +407,7 @@ python3 validate_skills.py skills_distilled/07-27
 | `skill_template.md` | excel 那条线的输出格式定义，**是 prompt 的一部分**，改格式改这里 |
 | `skill_case_merge_pipeline.py` | 增量并入新故障案例 |
 | `skill_eval_optimize_pipeline.py` | 按评测结果优化 skill（加 `--check` 只验匹配） |
-| `apply_change_report.py` | 把审过的报告落盘（加 `--apply` 才写） |
+| `apply_change_report.py` | 把审过的报告落盘（加 `--apply` 才写、`--rename` 改落盘文件名） |
 | `compare_models.py` | 多模型并排比较 |
 | `model_config.py` | 模型接入配置，直接运行可自查 |
 | `build_skill_tree.py` | 按实际目录重建树结构 |
@@ -451,6 +451,19 @@ python3 validate_skills.py skills_distilled/07-27
 **动作要和磁盘上的实际情况对得上**：模型偶尔会给出与实际不符的 `action`，两种都不能照做——`create` 到已存在的文件会把既有 skill 整篇覆盖掉（而且悄无声息），`append` 到不存在的文件直接报错。两处都会被挡下、记进报告的"处理失败"，交人工确认是改判动作还是路径写错了。`skill_case_merge_pipeline.py` 自己落盘时（`DRY_RUN=False`）做同样的核对，两条落盘路径的防护是一致的。
 
 **审改动用 `--diff`**：整篇覆盖只报"9609→9956字符"看不出改了什么，而判据有没有真被改掉、原有场景有没有被顺手删掉，都得逐行看。`--diff` 一定不写文件（同时给了 `--apply` 也不写）。
+
+**落盘时改文件名用 `--rename`**：报告里的路径是流水线按告警名推出来的，审的时候常常想换个名字——几张表的告警名一样，推出来的路径就撞在一起。
+
+```bash
+# 只换文件名，目录不动；.md 可以省
+python3 apply_change_report.py reports/excel_skill_report_08-18.md skills_from_excel/08-18 \
+    --rename "排障步骤/CPU利用率超限定位.md=CPU利用率超限-NETCONF与SNMP" --apply
+
+# 左边只写文件名也行；右边带 `/` 就整条路径都换
+python3 apply_change_report.py <报告> <目录> --rename "CPU利用率超限定位.md=CPU定位/NETCONF与SNMP.md" --apply
+```
+
+可以给多次。左边匹配不到报告里任何一处改动时**直接报错退出**并列出报告里有哪些路径——拼错了却静默落到原名下，比不落盘更糟；新名字必须是 skill 目录下的相对路径（绝对路径和 `..` 都会被挡下）。`--diff` 下同样只打印新路径、不写文件。
 
 ### 整篇覆盖的防护
 

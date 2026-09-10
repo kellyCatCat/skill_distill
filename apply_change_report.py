@@ -12,11 +12,20 @@ markdown应用到skill目录：追加块拼到文件末尾，新建块写成新�
 落盘是幂等的：追加前先比对小节标题，已经存在的小节跳过；整篇覆盖前先比对内容，
 与现有文件一致时跳过。所以同一份报告重复执行不会把内容追加两遍。
 
+落盘时可以改文件名：报告里的路径是流水线按告警名推出来的，审的时候常常想换个
+名字（几张表的告警名一样，推出来的路径就撞在一起），用 `--rename 旧=新` 指定，
+不必回头去改报告或重跑流水线。
+
 用法：
   python3 apply_change_report.py                       # 预演今天的报告，不写文件
   python3 apply_change_report.py --diff                # 逐行看落盘前后的差异
   python3 apply_change_report.py --apply               # 实际写入
   python3 apply_change_report.py <报告路径> <skill目录> [--diff|--apply]
+  python3 apply_change_report.py <报告> <目录> --rename "排障步骤/CPU利用率超限定位.md=CPU利用率超限-NETCONF.md" --apply
+
+`--rename` 可以给多次。等号左边写报告里的那个路径（只写文件名也行），右边写想要的
+名字：不带 `/` 就只换文件名、目录不动，带 `/` 就整条路径都换；`.md` 可以省。
+左边匹配不到任何一处改动时直接报错退出——拼错了却静默落到原名下，比不落盘更糟。
 
 整篇覆盖只报"9609→9956字符"看不出改了什么，审的时候用 --diff 逐行看：判据有没有
 真被改掉、原有场景有没有被顺手删掉。--diff 一定不写文件。
@@ -59,6 +68,72 @@ def parse_report(report_path: str) -> list:
             "content": block.group(1).strip(),
         })
     return changes
+
+
+def parse_renames(argv: list) -> list:
+    """把命令行里的 `--rename 旧=新` 收成 [(旧, 新)]。`--rename=旧=新` 也认。"""
+    pairs, i = [], 0
+    while i < len(argv):
+        arg = argv[i]
+        value = ""
+        if arg == "--rename" and i + 1 < len(argv):
+            value, i = argv[i + 1], i + 1
+        elif arg.startswith("--rename="):
+            value = arg[len("--rename="):]
+        if value:
+            if "=" not in value:
+                print(f"错误: --rename 要写成 `旧路径=新名字`，收到的是 {value!r}")
+                sys.exit(2)
+            old, new = value.split("=", 1)
+            pairs.append((old.strip(), new.strip()))
+        i += 1
+    return pairs
+
+
+def resolve_rename(target: str, new: str) -> str:
+    """按 `--rename` 的右值算出新的相对路径。
+
+    不带 `/` 就只换文件名、目录不动（"改写输出路径的文件名"通常就是这个意思）；
+    带 `/` 就整条路径都换。`.md` 省了自动补上。
+    """
+    new = new.strip()
+    # 落盘路径要拼到 skill 目录下：`..` 会写到目录外面去，而绝对路径去掉开头的
+    # `/` 之后会变成一个看着差不多、其实不是你要的相对路径，两种都当错处理
+    if os.path.isabs(new) or ".." in new.split("/"):
+        print(f"错误: --rename 的新名字要写成 skill 目录下的相对路径"
+              f"（不能是绝对路径、也不能带 `..`）: {new!r}")
+        sys.exit(2)
+    new = new.strip("/")
+    if not new.endswith(".md"):
+        new += ".md"
+    if "/" in new:
+        return new
+    parent = "/".join(target.split("/")[:-1])
+    return f"{parent}/{new}" if parent else new
+
+
+def apply_renames(changes: list, renames: list) -> list:
+    """按 `--rename` 改写各处改动的落盘路径，返回 [(原路径, 新路径)] 供打印。
+
+    左值先按整条路径比，再按文件名比。一条都没匹配上就退出：拼错了却静默落到
+    原名下，比不落盘更糟——人会以为自己改了名。
+    """
+    renamed = []
+    for old, new in renames:
+        old = old.strip().strip("/")
+        hit = [c for c in changes
+               if c["target"] == old or c["target"].split("/")[-1] == old
+               or c["target"].split("/")[-1] == (old if old.endswith(".md") else old + ".md")]
+        if not hit:
+            print(f"错误: --rename 的 {old!r} 在报告里找不到对应的改动；"
+                  f"报告里有：{'、'.join(c['target'] for c in changes)}")
+            sys.exit(2)
+        for change in hit:
+            target = resolve_rename(change["target"], new)
+            if target != change["target"]:
+                renamed.append((change["target"], target))
+                change["target"] = target
+    return renamed
 
 
 def render_diff(target: str, existing: str, new_text: str) -> str:
@@ -137,7 +212,8 @@ def apply_one(change: dict, skill_dir: str, apply: bool, show_diff: bool = False
             f"（{'、'.join(section_headings(content))}）")
 
 
-def main(report_path: str, skill_dir: str, apply: bool, show_diff: bool = False):
+def main(report_path: str, skill_dir: str, apply: bool, show_diff: bool = False,
+         renames: list = None):
     if show_diff:
         apply = False   # --diff 是审阅用的，永远不写文件
     print("=" * 60)
@@ -159,6 +235,11 @@ def main(report_path: str, skill_dir: str, apply: bool, show_diff: bool = False)
         print("错误: 变更说明里没有解析到任何改动内容")
         sys.exit(1)
 
+    for old_path, new_path in apply_renames(changes, renames or []):
+        print(f"改名: {old_path} → {new_path}")
+    if renames:
+        print()
+
     results = [apply_one(c, skill_dir, apply, show_diff) for c in changes]
     for line in results:
         print(line)
@@ -173,12 +254,29 @@ def main(report_path: str, skill_dir: str, apply: bool, show_diff: bool = False)
         sys.exit(1)
 
 
+def _positional(argv: list) -> list:
+    """去掉开关和 `--rename` 的取值，剩下的才是报告路径和 skill 目录。"""
+    args, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg == "--rename":
+            skip = True
+            continue
+        if arg.startswith("-"):
+            continue
+        args.append(arg)
+    return args
+
+
 if __name__ == "__main__":
-    flags = {"--apply", "--diff"}
-    args = [a for a in sys.argv[1:] if a not in flags]
+    argv = sys.argv[1:]
+    args = _positional(argv)
     main(
         args[0] if args else f"reports/skill_change_report_{datetime.now().strftime('%m-%d')}.md",
         args[1] if len(args) > 1 else "skills_distilled/07-16",
-        "--apply" in sys.argv[1:],
-        "--diff" in sys.argv[1:],
+        "--apply" in argv,
+        "--diff" in argv,
+        parse_renames(argv),
     )
