@@ -898,6 +898,9 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
     sheet_text = re.sub(r"[\s\-_]", "",
                         source_command_text(scenario) if scenario else "").lower()
     listed = "、".join(f"「{row[0]}」" for row in rows) or "（空）"
+    required_listed = "、".join(
+        f"「{row[0]}」" for row in rows
+        if len(row) > 1 and row[1].strip() in ("是", "Y", "yes")) or "（空）"
     for span in cli_lines(content):
         for param in re.findall(r"<([^>\n]+)>", span):
             if _param_declared(param, declared):
@@ -942,9 +945,23 @@ def check_declared_params(content: str, scenario: dict = None) -> str:
     for span in INLINE_CODE.findall(sections.get("前置检查", "")):
         for param in re.findall(r"<([^>\n]+)>", span):
             key = re.sub(r"[\s\-_]", "", param).lower()
-            if not any(key == r or key in r or r in key for r in required):
-                return (f"前置检查的命令用了参数 `<{param}>`，但入参列表里没有对应行——"
-                        f"前置检查的参数不可以超出入参列表")
+            if any(key == r or key in r or r in key for r in required):
+                continue
+            # 参数已经申报、只是填了「否」，和压根没申报，两种情形的改法完全不同：
+            # 前者要把那条命令挪出前置检查（它依赖前面步骤的回显，前置检查是线性
+            # 采集，拿不到），后者才是补一行。只说"入参列表里没有对应行"的话，
+            # 模型看着列表里明明有这一行，改不动。
+            if _param_declared(param, declared):
+                return (f"前置检查的命令 `{span.strip()}` 用了参数 `<{param}>`，"
+                        f"而它在入参列表里是**选填**（要从前面步骤的回显里取）。"
+                        f"前置检查只能用必填项，所以**把这条命令从前置检查挪到用得上它的"
+                        f"排查步骤里**；只有当这个参数确实能由用户/告警直接提供时，"
+                        f"才把它的「是否必填」改成「是」。"
+                        f"当前必填项只有：{required_listed}")
+            return (f"前置检查的命令 `{span.strip()}` 用了参数 `<{param}>`，"
+                    f"但入参列表里没有对应行——前置检查的参数不可以超出入参列表，"
+                    f"要么把这个参数补进入参列表并填「是」，要么把这条命令挪到"
+                    f"排查步骤里。当前必填项只有：{required_listed}")
     return ""
 
 
